@@ -1,0 +1,8 @@
+{
+  "input_dim": 600,
+  "ar" : 1,
+  "head_size": 32,
+  "num_classes": 11,
+  "bias_heads": 0,
+  "batch_size": 20
+}
