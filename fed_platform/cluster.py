@@ -6,6 +6,8 @@ import time
 from trainer.loss import Trainer, Validator, BaseLearner
 from utils.pack import LoaderPack
 
+from torch import nn
+
 TIMEOUT = 3000
 
 
@@ -13,9 +15,9 @@ class Cluster:
     '''
     TEST Cluster
     '''
-    def __init__(self, model=None, pack=None):
-        self.model = model
-        self.pack = pack
+    def __init__(self, model_map_location=None, pack=None):
+        self.pack = pack   # pre set
+
         if self.pack.args.mode == 'train':
             self.module = Trainer()
         elif self.pack.args.mode == 'val':
@@ -24,38 +26,68 @@ class Cluster:
             print(f'mode {self.pack.args.mode}::')
             self.module = BaseLearner()
 
+        self.model = self._set_model(model_map_location)
+
+    def _set_model(self, model_map_location):
+        model = model_map_location(pretrained=self.pack.args.pretrained)
+
+
+        return model
+
+
+    def _init_weight(self, model):
+        if isinstance(model, nn.Module):
+            pass
+        state_dict = None
+
+
     async def __aenter__(self, *args):
 
-        return self.module(self.net, self.pack)
+        return self.module(self.model, self.pack)
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
 
         pass
 
 
+class SegmentationCluster(Cluster):
+
+    def __init__(self, *args, **kwargs):
+        super(SegmentationCluster, self).__init__(*args, **kwargs)
+
+
 class LocalAPI:
 
-    def __init__(self, args, base_steam=None, base_reader=None,
+    def __init__(self, args, base_steam =None, base_reader=None,
                  base_net=None, base_cluster=None, verbose=False):
 
         super(LocalAPI).__init__()
         self.args = args
         self.mode = args.mode
         self.net = base_net
-        self.cluster = base_cluster
-        self.stream = base_steam(reader=base_reader(model=self.net, cluster=self.cluster),
+        self.cluster: Cluster = base_cluster
+        self.stream: FedStream = base_steam(reader=base_reader(model_map_locate=self.net, cluster=self.cluster),
                                  writer=None)
+
+        self.client_map = {0:'client_almost', 1: 'client_animal', 2: 'client_vehicle',
+                  3: 'client_obj', 4: 'client_all'}
+        self.root = args.root
+        self.client_state_dict_path = {}
+
         self.verbose = verbose
+
+
+
 
     def execute(self):
         result = []
         a_start = time.time()
 
-        mapper = {0:'clinet_almost', 1:'client_animal', 2:'client_vehicle',
-                  3:'client_obj'}
+
+        chk_pth_path = {}
 
         for l in range(self.args.num_clinets):
-            pack = LoaderPack(args, mapper[l])
+            pack = LoaderPack(args, self.client_map[l])
             self.stream.scheduler(pack=pack)
 
         tasks = self.stream.executor()
@@ -86,13 +118,11 @@ class LocalAPI:
 
 
 if __name__ == '__main__':
-
     from fed_platform.stream import FedStream, FedReader
+    from model.hailnet import hail_mobilenet_v3_large
     args = parse_opt()
 
-    model = None
-
-    running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=model, base_cluster=Cluster,
+    running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=hail_mobilenet_v3_large, base_cluster=Cluster,
                        verbose=True)
 
 

@@ -6,6 +6,11 @@ import torch
 from torchvision.transforms import functional as F
 
 
+def load_state_dict_from_local_path(path, model_dir, map_location):
+
+    return
+
+
 def unpickle(file, batch_num):
     import pickle
     import os
@@ -59,6 +64,8 @@ class Config:
     @property
     def dict(self):
         return self.__dict__
+
+
 
 class LoadImage(object):
 

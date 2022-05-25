@@ -3,7 +3,7 @@ import asyncio
 import requests
 from queue import PriorityQueue
 import time
-from cluster import Cluster
+from cluster import Cluster, SegmentationCluster
 
 TIMEOUT = 3000
 '''
@@ -18,7 +18,7 @@ class BaseStream:
         self.writer: BaseWriter = writer
         self._tasks = None
         self.timeout = timeout
-        self._schedule = []   # dev modifiy class type list to PrirityQueue
+        self._schedule = []   # task tuple set
         print(f"{'-'*10}\nStream Info:\n{self}\n{'-'*10}")
 
     def __repr__(self):
@@ -66,7 +66,7 @@ class FedStream(BaseStream):
     '''
     def __init__(self, *args, **kwargs):
         super(FedStream, self).__init__(*args, **kwargs)
-        self.reader: FedReader
+        # self.reader: FedReader
         if self.check_status(self.reader):
             print('super init', self.reader)
 
@@ -128,19 +128,18 @@ class BaseReader:
 
 class FedReader(BaseReader):
 
-    def __init__(self, model=None, cluster=None):
+    def __init__(self, model_map_locate=None, cluster=None):
         super(FedReader).__init__()
-        self.net = model
-        self.cluster = cluster
+        self.map_model = model_map_locate   # func
+        self.cluster : Cluster = cluster
 
     async def run(self, packer):
         '''
-
         :param loader:
         :return: fed model parmas
         '''
         if issubclass(self.session, Cluster):
-            async with self.cluster(self.net, packer) as response:
+            async with self.cluster(self.map_model, packer) as response:
                 result = response
                 return result
 
