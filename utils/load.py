@@ -16,6 +16,7 @@ def unpickle(file, batch_num):
 
     return dict
 
+
 class ImageDataset(data.Dataset):
 
     def __init__(self, data, test_mode=False):
@@ -67,6 +68,8 @@ class LoadImage(object):
     def __call__(self, path_img):
         return cv2.imread(path_img)
 
+
+
 class Detection(data.Dataset):
     """
 
@@ -79,7 +82,6 @@ class Detection(data.Dataset):
         self.root = args.root + '/' + args.data_path + '/'
         self.data_type = args.data_path.split('/')[-1]
 
-
         self.image_sets = image_sets
         self.transform = transform
         self.anno_transform = anno_transform
@@ -90,7 +92,7 @@ class Detection(data.Dataset):
 
     def _map(self, subsets):
 
-        with open(self.rootpath + 'annots.json', 'r') as f:
+        with open(self.root + 'annots.json', 'r') as f:
             db = json.load(f)
 
         img_list = []
@@ -99,7 +101,7 @@ class Detection(data.Dataset):
         annots = db['annotations']
         idlist = []
         if 'ids' in db.keys():
-            idlist = db['id']
+            idlist = db['ids']
         ni = 0
         nb = 0.0
         print_str = ''
@@ -133,7 +135,7 @@ class Detection(data.Dataset):
         labels = annot_info[3]
 
         img_name = '{:s}{:s}.jpg'.format(self.root, img_id)
-        # print(img_name)
+        print(img_name, labels)
 
         # t0 = time.perf_counter()
         img = self.image_loader(img_name)
@@ -146,7 +148,10 @@ class Detection(data.Dataset):
         imgs.append(img)
         imgs = np.asarray(imgs)
         # print(img_name, imgs.shape)
-        imgs, boxes_, labels_ = self.transform(imgs, boxes, labels, 1)
+        if self.transform:
+            imgs, boxes_, labels_ = self.transform(imgs, boxes, labels, 1)
+        else:
+            imgs, boxes_, labels_ = imgs, boxes, labels
         # print('t2', time.perf_counter()-t0)
         target = np.hstack((boxes_, np.expand_dims(labels_, axis=1)))
         # imgs = imgs[:, :, :, (2, 1, 0)]

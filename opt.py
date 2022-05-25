@@ -10,42 +10,67 @@ model's params is there
 
 
 def parse_opt():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', default='test', help='train | inference | test ')
+    parser = argparse.ArgumentParser(prog='test_setting')
+    parser.add_argument('--mode', default='train', help='train | inference | test ')
 
-    parser.add_argument('--basenet', default='resnet50', help='pretraiend base model')
-    parser.add_argument('--model_name', default='fpn', help='')
-    parser.add_argument('--model_dir', default='./experiments', help='temp ')
-    parser.add_argument('--cfg_path', default='./experiments/baseline.config.json')
+
+    # parser.add_argument('--use_cuda', action='store_true', help='If true, use GPU')
+    # parser.set_defaults(use_cuda=True)
+
+    parser.add_argument('--basenet', default='mobilenet', help='pretraiend base model')
+    parser.add_argument('--model_name', default='mpn', help='mpn | fpn')
+
+    parser.add_argument('--pretrained', default=False, type=bool)
+    parser.add_argument('--distributed', default=False, type=bool)
+    parser.add_argument('--workers', default=2, type=int)
+
     parser.add_argument('--root', default='/home/hail09/FedPn')
 
+    parser.add_argument('--model_dir', default='./experiments', help='temp')
+    parser.add_argument('--cfg_path', default='./experiments/baseline.config.json')
+
+    parser.add_argument('--save_root', default='/home/hail09/FedPn/experiments/coco_mobile',
+                        help='Location to save checkpoint models')
+
+    parser.add_argument('--tensorboard', default=True)
+
     parser.add_argument('--dataset', default='coco')
-    parser.add_argument('--data_path', default='dataset/coco/val2017')
+    parser.add_argument('--data_path', default='dataset/coco')
 
     parser.add_argument('--train_sets', default=['train2017'])
     parser.add_argument('--val_sets', default=['val2017'])
 
+    parser.add_argument('--input_dim', default=600, type=int, help='Input Size for SSD')
+
     parser.add_argument('--train_size', default=0.8)
-    parser.add_argument(
-        '--file_path',
-        default='./dataset/cifar-10-batches-py',
-        type=str,
-        help='Root directory path of data')
+
+    parser.add_argument('--epochs', default=3, type=int)
+    parser.add_argument('--start_epoch', default=0, type=int)
+
+    parser.add_argument('--aux_loss', default=True, type=bool)
+    parser.add_argument('--resume', default=False)
+    parser.add_argument('--test_only', default=False)
+
+    parser.add_argument('--client_type', default='client_all',type=str,
+                        help = 'client_obj | client_animal | client_vehicle | client_all')
+
+    parser.add_argument('--local_path', default='/data_batch_')
+    parser.add_argument('--local_set', default='1')
 
     parser.add_argument(
         '--gpu',
-        default=0,
+        default=3,
         type=int)
 
     parser.add_argument(
         '--use_cuda',
         action='store_true',
         help='If true, use GPU.')
-    parser.set_defaults(std_norm=False)
+    # parser.set_defaults(std_norm=False)
 
     parser.add_argument(
         '--log_interval',
-        default=5,
+        default=50,
         type=int,
         help='Log interval for showing training loss')
 

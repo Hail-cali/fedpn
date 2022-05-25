@@ -3,7 +3,8 @@ import asyncio
 from opt import parse_opt
 import time
 
-from trainer.loss import Trainer, Validator
+from trainer.loss import Trainer, Validator, BaseLearner
+from utils.pack import LoaderPack
 
 TIMEOUT = 3000
 
@@ -19,7 +20,9 @@ class Cluster:
             self.module = Trainer()
         elif self.pack.args.mode == 'val':
             self.module = Validator()
-
+        else:
+            print(f'mode {self.pack.args.mode}::')
+            self.module = BaseLearner()
 
     async def __aenter__(self, *args):
 
@@ -48,9 +51,12 @@ class LocalAPI:
         result = []
         a_start = time.time()
 
-        for l in range(self.args.num_clinets):
+        mapper = {0:'clinet_almost', 1:'client_animal', 2:'client_vehicle',
+                  3:'client_obj'}
 
-            self.stream.scheduler()
+        for l in range(self.args.num_clinets):
+            pack = LoaderPack(args, mapper[l])
+            self.stream.scheduler(pack=pack)
 
         tasks = self.stream.executor()
 
@@ -91,4 +97,3 @@ if __name__ == '__main__':
 
 
 
-    pass

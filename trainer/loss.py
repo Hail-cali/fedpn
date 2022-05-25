@@ -4,6 +4,7 @@ import tqdm
 import torch
 from utils.pack import LoaderPack
 
+
 class ComputeAvg(object):
 
     def __init__(self):
@@ -61,9 +62,16 @@ class BaseLearner:
     def __init__(self):
         super(BaseLearner, self).__init__()
 
+    def __call__(self, *args):
+        print('base learner')
+
+        return
+
     def unpack(self, dataset):
 
         return
+
+
 
 
 class Trainer(BaseLearner):

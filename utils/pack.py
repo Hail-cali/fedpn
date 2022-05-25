@@ -2,10 +2,12 @@
 
 class LoaderPack:
 
-    def __init__(self, args, train_loader=None, val_loader=None, test_loader=None,
+    def __init__(self, args, client=None, train_loader=None, val_loader=None, test_loader=None,
                  optim=None, crit=None):
 
         self.args = args
+        if client:
+            pass
 
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -23,3 +25,16 @@ class LoaderPack:
 
         self.losses_avg = None
         self.accuracies_avg = None
+
+
+class GeneratorPack(LoaderPack):
+
+    def __init__(self, *args):
+        super(GeneratorPack, self).__init__(*args)
+
+    @property
+    def data_loader(self):
+        if not self.data_loader:
+            path = self.args.file_path + self.args.local_path + self.args.local_set
+
+        return
