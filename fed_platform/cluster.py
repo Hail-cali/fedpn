@@ -76,21 +76,24 @@ class LocalAPI:
 
         self.verbose = verbose
 
-
-
-
-    def execute(self):
-        result = []
-        a_start = time.time()
-
-
-        chk_pth_path = {}
+    def dispense_task(self):
 
         for l in range(self.args.num_clinets):
             pack = LoaderPack(args, self.client_map[l])
             self.stream.scheduler(pack=pack)
 
         tasks = self.stream.executor()
+
+        return tasks
+
+
+    def execute(self):
+        result = []
+        a_start = time.time()
+
+        chk_pth_path = {}
+        tasks = self.dispense_task()
+
 
         loop = asyncio.get_event_loop()
 
