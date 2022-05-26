@@ -3,7 +3,9 @@ from collections import defaultdict
 import tqdm
 import torch
 from utils.pack import LoaderPack
-
+from utils import image_util
+import os
+from utils import image_util
 
 class ComputeAvg(object):
 
@@ -67,11 +69,107 @@ class BaseLearner:
 
         return
 
-    def unpack(self, dataset):
+    def train_one_epoch(self, model, pack):
+        model.train()
+        metric_logger = image_util.MetricLogger(delimiter="  ")
+        metric_logger.add_meter('lr', image_util.SmoothedValue(window_size=1, fmt='{value}'))
+        header = 'Epoch: [{}]'.format(pack.epoch)
+        for image, target in metric_logger.log_every(pack.data_loader, pack.print_freq, header):
+            image, target = image.to(pack.device), target.to(pack.device)
+            output = model(image)
+            loss = pack.criterion(output, target)
 
-        return
+            pack.optimizer.zero_grad()
+            loss.backward()
+            pack.optimizer.step()
+
+            pack.lr_scheduler.step()
+
+            metric_logger.update(loss=loss.item(), lr=pack.optimizer.param_groups[0]["lr"])
+
+        print(metric_logger)
+
+    def evaluate(self, model, pack):
+        model.eval()
+        confmat = image_util.ConfusionMatrix(pack.num_classes)
+        metric_logger = image_util.MetricLogger(delimiter="  ")
+        header = 'Test:'
+        with torch.no_grad():
+            for image, target in metric_logger.log_every(pack.val_loader, 100, header):
+                image, target = image.to(pack.device), target.to(pack.device)
+                output = model(image)
+                output = output['out']
+
+                confmat.update(target.flatten(), output.argmax(1).flatten())
+
+            confmat.reduce_from_all_processes()
+
+        return confmat
+
+    def update_state_dict(self, pack):
+        '''
+        :Set if start_epoch not first and pth path exits, update state_dict
+        :param pack: LoaderPack
+
+        '''
+        if os.path.exists(pack.local_client_path) and pack.args.start_epoch != 0:
+            checkpoint = torch.load(pack.local_client_path, map_location='cpu')
+            if not pack.args.test_only:
+                pack.optimizer.load_state_dict(checkpoint['optimizer'])
+                pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+                pack.args.start_epoch = checkpoint['epoch'] + 1
+        else:
+            print(f'Can not load state dict, Check args resume path: {pack.args.resume}')
 
 
+class SegmentTrainer(BaseLearner):
+
+    def __init__(self):
+        super(SegmentTrainer, self).__init__()
+
+    def __call__(self, model, pack):
+
+        '''
+        train one epoch
+        :param model: allocated model
+        :param pack: Generated pack
+        :return:
+        '''
+
+        self.update_state_dict(pack)  # if args.resume init, update optim, lr_scheduler, start_epoch
+
+        self.train_one_epoch(model, pack)
+        confmat = self.evaluate(model, pack)
+
+        print(confmat)
+        checkpoint = {
+            'model': model.state_dict(),
+            'optimizer': pack.optimizer.state_dict(),
+            'lr_scheduler': pack.lr_scheduler.state_dict(),
+            'epoch': pack.epoch,
+            'args': pack.args
+        }
+        image_util.save_on_master(
+            checkpoint,
+            os.path.join(pack.args.save_root, f"{pack.client}_model_{pack.start_epoch+1}.pth"))
+
+        image_util.save_on_master(
+            checkpoint,
+            os.path.join(pack.args.save_root, f'{pack.client}_checkpoint.pth'))
+
+        pack.start_epoch += 1
+        return model, pack
+
+
+class SegmentValidator(BaseLearner):
+
+    def __init__(self):
+        super(SegmentValidator, self).__init__()
+
+    def __call__(self, model, pack):
+        res = self.evaluate(model, pack)
+
+        return res
 
 
 class Trainer(BaseLearner):
@@ -155,70 +253,3 @@ class Validator(BaseLearner):
         pack.accuracies_avg = accuracies.avg
         return model, pack
 
-
-
-
-
-
-
-# def train_epoch(model, data_loader, criterion, optimizer, epoch, log_interval, device):
-#
-#     model.train()
-#     train_loss = 0.0
-#     losses = ComputeAvg()
-#     accuracies = ComputeAvg()
-#     batch_idx = 0
-#
-#     # for (data, targets) in tqdm(data_loader, desc='Train ::'):
-#     for (data,targets) in data_loader:
-#         data, targets = data.to(device), targets.to(device)
-#         outputs = model(data)
-#         loss = criterion(outputs, targets)
-#         acc = calculate_acc(outputs, targets)
-#
-#         train_loss += loss.item()
-#         losses.update(loss.item(), data.size(0))
-#         accuracies.update(acc, data.size(0))
-#
-#         optimizer.zero_grad()
-#         loss.backward()
-#         optimizer.step()
-#
-#         if (batch_idx + 1) % log_interval == 0:
-#             avg_loss = train_loss / log_interval
-#             print(f' log e[{epoch}]: [{(batch_idx + 1) * len(data)}/{len(data_loader.dataset)} ({((batch_idx + 1)/len(data_loader))*100.0:.0f}%)]\tLoss: {avg_loss:.6f}'
-#                 )
-#             train_loss = 0.0
-#
-#         batch_idx += 1
-#
-#
-#     print(f"Train Done ({len(data_loader.dataset)}"
-#           f" samples): Average loss: {losses.avg:.4f}\t"
-#           f"Acc: {(accuracies.avg*100):.4f}%")
-#
-#     return losses.avg, accuracies.avg
-#
-# def val_epoch(model, data_loader, criterion, device):
-#     model.eval()
-#     print(f'val start', end=': ')
-#     losses = ComputeAvg()
-#     accuracies = ComputeAvg()
-#     with torch.no_grad():
-#         for (data, targets) in tqdm(data_loader, desc='val epoch:: '):
-#             data, targets = data.to(device), targets.to(device)
-#             outputs = model(data)
-#
-#             loss = criterion(outputs, targets)
-#             acc = calculate_acc(outputs, targets)
-#
-#             losses.update(loss.item(), data.size(0))
-#             accuracies.update(acc, data.size(0))
-#             # print('epoch')
-#     # show info
-#
-#     print(f"Validation Done ({len(data_loader.dataset)}"
-#           f" samples): Average loss: {losses.avg:.4f}\t"
-#           f"Acc: {(accuracies.avg * 100):.4f}%")
-#
-#     return losses.avg, accuracies.avg

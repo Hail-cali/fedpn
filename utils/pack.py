@@ -1,40 +1,52 @@
+import os
 
 
 class LoaderPack:
 
     def __init__(self, args, client=None, train_loader=None, val_loader=None, test_loader=None,
-                 optim=None, crit=None):
+                 optim=None, crit=None, global_gpu=False):
 
         self.args = args
-        if client:
-            pass
+        self.client = client
+        self.start_epoch = args.start_epoch
+        self.cfg_path = self.args.cfg_path
 
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
 
-        if self.args.mode == 'train':
-            self.data_loader = self.train_loader
-        else:
-            self.data_loader = self.val_loader
-
         self.optimizer = optim
         self.criterion = crit
-        self.device = self.args.device
-        self.log_interval= args.lov_interval
 
-        self.losses_avg = None
-        self.accuracies_avg = None
+        if global_gpu:
+            self.device = self.args.device
+        else:
+            self.device = self.set_local_gpu(global_gpu)
 
+        self.log_interval = self.args.log_interval
 
-class GeneratorPack(LoaderPack):
+        # self.losses_avg = None
+        # self.accuracies_avg = None
 
-    def __init__(self, *args):
-        super(GeneratorPack, self).__init__(*args)
+    def set_local_gpu(self, status):
+        import torch
+        self.args.use_cuda = f'cuda:{self.args.gpu}' if torch.cuda.is_available() else 'cpu'
+        return torch.device(self.args.use_cuda)
 
     @property
     def data_loader(self):
-        if not self.data_loader:
-            path = self.args.file_path + self.args.local_path + self.args.local_set
+        if self.args.mode == 'train':
+            return self.train_loader
+        elif self.args.mode == 'val':
+            return self.val_loader
 
-        return
+    @property
+    def local_client_path(self):
+        return os.path.join(self.args.resume, f"{self.client}_model_{self.start_epoch}.pth" )
+
+
+class GeneratePack(LoaderPack):
+
+    def __init__(self, *args, **kwargs):
+        super(GeneratePack, self).__init__(*args, **kwargs)
+

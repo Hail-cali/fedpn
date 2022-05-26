@@ -23,15 +23,10 @@ def parse_opt():
     # gpu & multi processing
     parser.add_argument('--distributed', default=False, type=bool)
     parser.add_argument('--workers', default=2, type=int)
-    parser.add_argument(
-        '--gpu',
-        default=3,
-        type=int)
+    parser.add_argument('--gpu', default=3, type=int, help='use gpu num')
+    parser.add_argument('--use_cuda', action='store_true', help='If true, use GPU.')
 
-    parser.add_argument(
-        '--use_cuda',
-        action='store_true',
-        help='If true, use GPU.')
+    parser.add_argument('--device', default='cpu', help='allocated in api')
 
     # file root
     parser.add_argument('--root', default='/home/hail09/FedPn')
@@ -55,20 +50,16 @@ def parse_opt():
     parser.add_argument('--epochs', default=3, type=int)
     parser.add_argument('--start_epoch', default=0, type=int)
     parser.add_argument('--aux_loss', default=True, type=bool)
-    parser.add_argument('--resume', default=False)
-
+    parser.add_argument('--resume', default='',
+                        help='resume checkpoint path | /home/hail09/FedPn/experiments/coco_mobile')
+    parser.add_argument('--test_only', default=False, type=bool, help='if True, test mode, False, load state_dict')
 
     # log
     parser.add_argument('--tensorboard', default=True)
-    parser.add_argument(
-        '--log_interval',
-        default=50,
-        type=int,
-        help='Log interval for showing training loss')
-
+    parser.add_argument('--log_interval', default=50, type=int, help='Log interval for showing training loss')
 
     # client_setting
-    parser.add_argument('--client_type', default='client_all',type=str,
+    parser.add_argument('--client_type', default='client_all', type=str,
                         help = 'client_obj | client_animal | client_vehicle | client_all')
 
     parser.add_argument('--num_clients', default=3)
