@@ -3,13 +3,23 @@ import asyncio
 from opt import parse_opt
 import time
 import os
-from trainer.loss import Trainer, Validator, BaseLearner, SegmentTrainer, SegmentValidator
+from trainer.loss import Trainer, Validator, BaseLearner, SegmentTrainer, SegmentValidator, seg_criterion
 from utils.pack import LoaderPack
 from utils.load import Config
+from utils import image_util
 import torch
 from torch import nn
 
 TIMEOUT = 3000
+
+
+def fed_aggregate_avg(data):
+
+    return
+
+def fed_aggregate_(data):
+
+    return
 
 
 class Cluster:
@@ -27,13 +37,13 @@ class Cluster:
         else:
             print(f'mode {self.pack.args.mode}::')
             self.module = BaseLearner()
+        self.map_model = model_map_location
+        self.model = None
+        # self._set_model(model_map_location) # allocate self.model
 
-        self._set_model(model_map_location) # allocate self.model
+    def _set_model(self, model_map_location, config):
 
-
-    def _set_model(self, model_map_location):
-
-        config = Config(json_path=str(self.pack.cfg_path))
+        # config = Config(json_path=str(self.pack.cfg_path))
         self.model = model_map_location(pretrained=self.pack.args.pretrained)
         self.model.to(self.pack.device)
         model_without_ddp = self.model
@@ -51,15 +61,23 @@ class Cluster:
             params = [p for p in model_without_ddp.aux_classifier.parameters() if p.requires_grad]
             params_to_optimize.append({"params": params, "lr": config.lr * 10})
 
-        if self.pack.args.resume:
-            print(self.pack.local_client_path)
+        self.pack.optimizer = torch.optim.SGD(
+            params_to_optimize,
+            lr=config.lr, momentum=config.momentum, weight_decay=config.wd)
 
-            checkpoint = torch.load(self.pack.local_client_path, map_location='cpu')
-            model_without_ddp.load_state_dict(checkpoint['model'], strict=not self.pack.args.test_only)
-            self.pack.start_epoch = checkpoint['epoch'] + 1
-        print('\n\n', self.pack.start_epoch)
+        self.pack.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.pack.optimizer,
+            lambda x: (1 - x / (len(self.pack.data_loader) * args.epochs)) ** 0.9)
+
+        self.pack.criterion = seg_criterion
 
     async def __aenter__(self, *args):
+        config = Config(json_path=str(self.pack.cfg_path))
+
+        if self.pack.dynamic:
+            self.pack.set_loader(config)
+
+        self._set_model(self.map_model, config)
 
         return self.module(self.model, self.pack)
 
@@ -99,8 +117,8 @@ class LocalAPI:
         self.client_map = {0:'client_almost', 1: 'client_animal', 2: 'client_vehicle',
                   3: 'client_obj', 4: 'client_all'}
 
-        # local allocation
-        self.clients = self.create_client_local()
+        self.clients = None
+
         self.verbose = verbose
 
     def set_global_gpu(self):
@@ -112,11 +130,14 @@ class LocalAPI:
         clients = {}
 
         for l in range(self.args.num_clients):
+            # dynamic allocate model, dataset, data_loader, lr, optim
+            client_pack = LoaderPack(args, dynamic=True, client=self.client_map[l], global_gpu=self.global_gpu)
 
-            client_pack = LoaderPack(args, clinet=self.client_map[l],
-                                    train_loader=None, val_loader=None, test_loader=None,
-                                    optim=None, crit=None,
-                                    global_gpu=self.global_gpu)
+            # local static allocation
+            # client_pack = LoaderPack(args, clinet=self.client_map[l],
+            #                         val_loader=None, test_loader=None,
+            #                         optim=None, crit=None,
+            #                         global_gpu=self.global_gpu)
 
             clients[l] = client_pack
 
@@ -131,31 +152,80 @@ class LocalAPI:
 
         return tasks
 
-    def execute(self):
+    def execute_one_round(self, tasks):
         result = []
-        a_start = time.time()
-
-        tasks = self.dispense_task()
-
         loop = asyncio.get_event_loop()
-
         finished, unfinished = loop.run_until_complete(
             asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         )
-
         for task in finished:
             result.append(task.result())
-
             if self.verbose:
                 print(task.result())
-
         print("unfinished:", len(unfinished))
-
         loop.close()
+        return result
 
-        a_end = time.time()
 
-        print(f'total time {a_end - a_start:.5f}times')
+    def aggregation(self, data, epoch):
+        '''
+
+        :param data: asyio module class
+        :param epoch:  cur epoch round
+
+        '''
+
+
+        model = None
+
+
+
+
+
+
+
+
+        model_path = os.path.join(self.args.save_root, self.args.global_model_path)
+        checkpoint = {
+            'model': model.state_dict(),
+            'epoch': epoch,
+            'args': args
+        }
+        image_util.save_on_master(
+            checkpoint,
+            model_path)
+
+    def set_phase(self):
+        # local allocation
+        self.clients = self.create_client_local()
+
+    def train_phase(self):
+        tasks = self.dispense_task()
+        result = self.execute_one_round(tasks)
+        return result
+
+    def deploy_phase(self, data):
+        self.args.start_epoch += 1
+        self.aggregation(data, self.args.start_epoch)
+        self.args.update_status = True
+
+    def execute(self):
+
+        total_start = time.time()
+
+        start = self.args.start_epoch
+        end = self.args.epochs
+
+        for round in range(start, end):
+
+            print(f'round {round} start ')
+            self.set_phase()
+            result = self.train_phase()
+            self.deploy_phase(result)
+
+        total_end = time.time()
+
+        print(f'total time {total_end-total_start:.5f}times')
         print(f"{'+' * 20}")
 
         return result
@@ -169,7 +239,7 @@ if __name__ == '__main__':
     args = parse_opt()
 
     running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=hail_mobilenet_v3_large,
-                       base_cluster=Cluster, global_gpu=True, verbose=True)
+                       base_cluster=SegmentationCluster, global_gpu=True, verbose=False)
 
 
     # running.execute()
