@@ -8,16 +8,56 @@ from utils.pack import LoaderPack
 from utils.load import Config
 from utils import image_util
 import torch
+from collections import defaultdict
 from torch import nn
+import numpy as np
+
+
 
 TIMEOUT = 3000
 
 
-def fed_aggregate_avg(data):
+def fed_aggregate_avg(results):
+    '''
 
-    return
+    :param results: defaultdict ( model,
+    :return:
+    '''
+    global_layers = {str(): "out"}
 
-def fed_aggregate_(data):
+    agg = defaultdict()
+    size = 1
+
+    for client in results:
+
+        for k, v in client['params'].items():
+            agg[k] += (v * client['data_len'])
+            size += client['data_len']
+
+    if size > 1:
+        size -= 1
+
+    for k, v in agg.items():
+        if torch.is_tensor(v):
+            agg[k] = torch.div(v, size)
+
+        elif isinstance(v, np.ndarray):
+            agg[k] = np.divide(v, size)
+
+        elif isinstance(v, list):
+            agg[k] = [val / size for val in agg[k]]
+
+        elif isinstance(v, int):
+            agg[k] = v / size
+
+    return agg
+
+        # result['state']
+        # result['data_len']
+        # result['data_info']
+
+
+def fed_aggregate_(result):
 
     return
 
@@ -39,19 +79,20 @@ class Cluster:
             self.module = BaseLearner()
         self.map_model = model_map_location
         self.model = None
-        # self._set_model(model_map_location) # allocate self.model
 
     def _set_model(self, model_map_location, config):
 
-        # config = Config(json_path=str(self.pack.cfg_path))
         self.model = model_map_location(pretrained=self.pack.args.pretrained)
         self.model.to(self.pack.device)
+
+        if self.pack.args.distributed:
+            self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.model)
         model_without_ddp = self.model
 
         # currently not supported
         if self.pack.args.distributed:
-            model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[args.gpu])
-            model_without_ddp = model.module
+            self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[args.gpu])
+            model_without_ddp = self.model.module
 
         params_to_optimize = [
             {"params": [p for p in model_without_ddp.backbone.parameters() if p.requires_grad]},
@@ -103,6 +144,7 @@ class LocalAPI:
 
         super(LocalAPI).__init__()
         self.args = args
+        print(self.args)
         self.mode = args.mode
         self.net = base_net
         self.cluster: Cluster = base_cluster
@@ -114,17 +156,18 @@ class LocalAPI:
         else:
             self.global_gpu = False
 
-        self.client_map = {0:'client_almost', 1: 'client_animal', 2: 'client_vehicle',
+        self.client_map = {0: 'client_animal', 1: 'client_vehicle', 2:'client_almost',
                   3: 'client_obj', 4: 'client_all'}
 
-        self.clients = None
+        self.clients = {}
 
         self.verbose = verbose
 
     def set_global_gpu(self):
-        self.args.use_cuda = f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu'
+        # self.args.use_cuda = f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu'
+        self.args.use_cuda = f'cuda' if torch.cuda.is_available() else 'cpu'
         self.args.device = torch.device(args.use_cuda)
-        print(f'| use {self.args.device} | cur gpu num: {torch.cuda.current_device()} | ')
+        # print(f'| use {self.args.device} | cur gpu num: {torch.cuda.current_device()} | ')
 
     def create_client_local(self):
         clients = {}
@@ -145,7 +188,7 @@ class LocalAPI:
 
     def dispense_task(self):
 
-        for l in range(self.args.num_clinets):
+        for l in range(self.args.num_clients):
             self.stream.scheduler(pack=self.clients[l])
 
         tasks = self.stream.executor()
@@ -175,15 +218,7 @@ class LocalAPI:
 
         '''
 
-
-        model = None
-
-
-
-
-
-
-
+        model = fed_aggregate_avg(data)
 
         model_path = os.path.join(self.args.save_root, self.args.global_model_path)
         checkpoint = {
@@ -230,6 +265,10 @@ class LocalAPI:
 
         return result
 
+    @property
+    def status(self):
+        msg =[f'Global_gpu: {self.global_gpu}']
+        return
 
 
 if __name__ == '__main__':
@@ -241,5 +280,9 @@ if __name__ == '__main__':
     running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=hail_mobilenet_v3_large,
                        base_cluster=SegmentationCluster, global_gpu=True, verbose=False)
 
+    # running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=hail_mobilenet_v3_large,
+    #                    base_cluster=SegmentationCluster, global_gpu=False, verbose=False)
 
-    # running.execute()
+    # print(running)
+
+    running.execute()
