@@ -2,6 +2,20 @@ import torch.nn as nn
 import torch
 # from model.layer import base_models
 from model.new_layer import base_models
+from torchvision.models.segmentation._utils import _SimpleSegmentationModel
+
+
+class FedPN(_SimpleSegmentationModel):
+
+    def __init__(self, *args, **kwargs):
+        super(FedPN, self).__init__(*args, **kwargs)
+        self.global_bb = 'test net'
+
+
+
+
+
+
 
 
 class PN(nn.Module):
