@@ -8,34 +8,37 @@ from utils.pack import LoaderPack
 from utils.load import Config
 from utils import image_util
 import torch
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+
 from torch import nn
 import numpy as np
 
 
 
 TIMEOUT = 3000
+OVERFLOW  = 100000003
 
 
-def fed_aggregate_avg(results):
+def fed_aggregate_avg(agg, results):
     '''
-
+    :param agg reseted model
     :param results: defaultdict ( model,
     :return:
     '''
-    global_layers = {str(): "out"}
-
-    agg = defaultdict()
+    # result['state']
+    # result['data_len']
+    # result['data_info']
     size = 1
+    # agg.to('cpu')
 
     for client in results:
-
+        # client.to('cpu')
         for k, v in client['params'].items():
             agg[k] += (v * client['data_len'])
             size += client['data_len']
 
-    if size > 1:
-        size -= 1
+    print('debug', size, len(results))
+
 
     for k, v in agg.items():
         if torch.is_tensor(v):
@@ -50,11 +53,8 @@ def fed_aggregate_avg(results):
         elif isinstance(v, int):
             agg[k] = v / size
 
-    return agg
+    print(agg)
 
-        # result['state']
-        # result['data_len']
-        # result['data_info']
 
 
 def fed_aggregate_(result):
@@ -108,7 +108,7 @@ class Cluster:
 
         self.pack.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             self.pack.optimizer,
-            lambda x: (1 - x / (len(self.pack.data_loader) * args.epochs)) ** 0.9)
+            lambda x: (1 - x / (len(self.pack.data_loader) * self.pack.args.epochs)) ** 0.9)
 
         self.pack.criterion = seg_criterion
 
@@ -137,6 +137,7 @@ class SegmentationCluster(Cluster):
             self.module = SegmentValidator()
 
 
+
 class LocalAPI:
 
     def __init__(self, args, base_steam=None, base_reader=None,
@@ -144,18 +145,20 @@ class LocalAPI:
 
         super(LocalAPI).__init__()
         self.args = args
-        print(self.args)
         self.mode = args.mode
         self.net = base_net
+        self.base_agg = None
         self.cluster: Cluster = base_cluster
         self.stream: FedStream = base_steam(reader=base_reader(model_map_locate=self.net, cluster=self.cluster),
                                  writer=None)
+        self.tester = SegmentValidator()
+
         if global_gpu:
             self.set_global_gpu()
             self.global_gpu = True
         else:
             self.global_gpu = False
-
+        print(f'Global GPU Set {self.global_gpu} allocated on ')
         self.client_map = {0: 'client_animal', 1: 'client_vehicle', 2:'client_almost',
                   3: 'client_obj', 4: 'client_all'}
 
@@ -163,18 +166,31 @@ class LocalAPI:
 
         self.verbose = verbose
 
+        # chk path if False, make dir on path
+        image_util.make_dir(self.args.save_root)
+        image_util.make_dir(self.args.model_dir)
+
     def set_global_gpu(self):
         # self.args.use_cuda = f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu'
-        self.args.use_cuda = f'cuda' if torch.cuda.is_available() else 'cpu'
-        self.args.device = torch.device(args.use_cuda)
+        self.args.use_cuda = f'cuda:{self.args.gpu}' if torch.cuda.is_available() else 'cpu'
+        self.args.device = torch.device(self.args.use_cuda)
         # print(f'| use {self.args.device} | cur gpu num: {torch.cuda.current_device()} | ')
+
+    def _generate_base_agg(self, load='cpu'):
+        self.base_agg = None
+        base_agg = self.net(pretrained=self.args.pretrained)
+
+        if load == 'cpu':
+            pass
+        base_agg.to(self.args.device)
+        self.base_agg = base_agg.state_dict()
 
     def create_client_local(self):
         clients = {}
 
         for l in range(self.args.num_clients):
             # dynamic allocate model, dataset, data_loader, lr, optim
-            client_pack = LoaderPack(args, dynamic=True, client=self.client_map[l], global_gpu=self.global_gpu)
+            client_pack = LoaderPack(self.args, dynamic=True, client=self.client_map[l], global_gpu=self.global_gpu)
 
             # local static allocation
             # client_pack = LoaderPack(args, clinet=self.client_map[l],
@@ -195,9 +211,28 @@ class LocalAPI:
 
         return tasks
 
-    def execute_one_round(self, tasks):
+    async def execute_one_round_local(self, tasks):
         result = []
+
+        finished = await asyncio.wait(tasks)
+        print(finished)
+
+
+        for job in finished:
+            while job:
+                task = job.pop()
+                result.append(task.result())
+                if self.verbose:
+                    print(task.result())
+
+        return result
+
+    def execute_one_round_global(self, tasks):
+        result = []
+
         loop = asyncio.get_event_loop()
+
+        print(loop)
         finished, unfinished = loop.run_until_complete(
             asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         )
@@ -209,7 +244,6 @@ class LocalAPI:
         loop.close()
         return result
 
-
     def aggregation(self, data, epoch):
         '''
 
@@ -218,13 +252,14 @@ class LocalAPI:
 
         '''
 
-        model = fed_aggregate_avg(data)
+        self._generate_base_agg()
+        fed_aggregate_avg(self.base_agg, data)
 
         model_path = os.path.join(self.args.save_root, self.args.global_model_path)
         checkpoint = {
-            'model': model.state_dict(),
+            'model': self.base_agg,
             'epoch': epoch,
-            'args': args
+            'args': self.args
         }
         image_util.save_on_master(
             checkpoint,
@@ -236,7 +271,12 @@ class LocalAPI:
 
     def train_phase(self):
         tasks = self.dispense_task()
-        result = self.execute_one_round(tasks)
+
+        if self.global_gpu:
+            result = self.execute_one_round_global(tasks)
+        else:
+            result = asyncio.run(self.execute_one_round_local(tasks))
+
         return result
 
     def deploy_phase(self, data):
@@ -256,14 +296,42 @@ class LocalAPI:
             print(f'round {round} start ')
             self.set_phase()
             result = self.train_phase()
+
             self.deploy_phase(result)
+            self.test()
 
         total_end = time.time()
 
         print(f'total time {total_end-total_start:.5f}times')
         print(f"{'+' * 20}")
 
-        return result
+        return
+
+
+    def test(self):
+        from utils.pack import get_dataset, get_transform
+
+        pack = LoaderPack(self.args, dynamic=False, val_loader=None, client='global', global_gpu=self.global_gpu)
+
+        dataset_test, _ = get_dataset(pack.data_path, self.args.dataset, "val", get_transform(train=False))
+        if self.args.distributed:
+            test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test)
+        else:
+            test_sampler = torch.utils.data.SequentialSampler(dataset_test)
+
+        val_loader = torch.utils.data.DataLoader(
+            dataset_test, batch_size=1,
+            sampler=test_sampler, num_workers=self.args.workers,
+            collate_fn=image_util.collate_fn)
+
+        pack.val_loader = val_loader
+
+        # self.base_agg
+        server_model = self.net(pretrained=self.args.pretrained)
+        model_path = os.path.join(self.args.save_root, self.args.global_model_path)
+        server_model.load_state_dict(torch.load(model_path)['model'])
+        server_model.to(self.args.device)
+        self.tester(server_model, pack)
 
     @property
     def status(self):

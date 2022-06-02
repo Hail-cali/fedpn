@@ -6,6 +6,19 @@ from utils.pack import LoaderPack
 from utils import image_util
 import os
 from utils import image_util
+import copy
+from utils.load import Config
+
+def seg_criterion(inputs, target):
+    losses = {}
+    for name, x in inputs.items():
+        losses[name] = torch.nn.functional.cross_entropy(x, target, ignore_index=255)
+
+    if len(losses) == 1:
+        return losses['out']
+
+    return losses['out'] + 0.5 * losses['aux']
+
 
 class ComputeAvg(object):
 
@@ -73,8 +86,8 @@ class BaseLearner:
         model.train()
         metric_logger = image_util.MetricLogger(delimiter="  ")
         metric_logger.add_meter('lr', image_util.SmoothedValue(window_size=1, fmt='{value}'))
-        header = 'Epoch: [{}]'.format(pack.epoch)
-        for image, target in metric_logger.log_every(pack.data_loader, pack.print_freq, header):
+        header = 'Epoch: [{}]'.format(pack.start_epoch)
+        for image, target in metric_logger.log_every(pack.data_loader, pack.args.log_interval, header):
             image, target = image.to(pack.device), target.to(pack.device)
             output = model(image)
             loss = pack.criterion(output, target)
@@ -90,8 +103,10 @@ class BaseLearner:
         print(metric_logger)
 
     def evaluate(self, model, pack):
+
         model.eval()
-        confmat = image_util.ConfusionMatrix(pack.num_classes)
+        config = Config(json_path=str(pack.cfg_path))
+        confmat = image_util.ConfusionMatrix(config.num_classes)
         metric_logger = image_util.MetricLogger(delimiter="  ")
         header = 'Test:'
         with torch.no_grad():
@@ -106,18 +121,29 @@ class BaseLearner:
 
         return confmat
 
-    def update_state_dict(self, pack):
+    @classmethod
+    def update_state_dict_(self, model, pack):
+
+
+        pass
+
+    def update_state_dict(self, model, pack):
         '''
         :Set if start_epoch not first and pth path exits, update state_dict
         :param pack: LoaderPack
-
         '''
+
         if os.path.exists(pack.local_client_path) and pack.args.start_epoch != 0:
             checkpoint = torch.load(pack.local_client_path, map_location='cpu')
+            model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
             if not pack.args.test_only:
+
                 pack.optimizer.load_state_dict(checkpoint['optimizer'])
                 pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
                 pack.args.start_epoch = checkpoint['epoch'] + 1
+
+            print('Updated state dict')
+
         else:
             print(f'Can not load state dict, Check args resume path: {pack.args.resume}')
 
@@ -136,29 +162,38 @@ class SegmentTrainer(BaseLearner):
         :return:
         '''
 
-        self.update_state_dict(pack)  # if args.resume init, update optim, lr_scheduler, start_epoch
+        self.update_state_dict(model, pack)  # if args.resume init, update optim, lr_scheduler, start_epoch
+        print(f"{'--'*30} \n Client RUN :: {pack.client} START || IN {pack.device}")
 
-        self.train_one_epoch(model, pack)
-        confmat = self.evaluate(model, pack)
+        # self.train_one_epoch(model, pack)
+        # confmat = self.evaluate(model, pack)
+        # print(f"|| Client Validate :: {pack.client} ")
+        # print(confmat)
+        # checkpoint = {
+        #     'model': model.state_dict(),
+        #     'optimizer': pack.optimizer.state_dict(),
+        #     'lr_scheduler': pack.lr_scheduler.state_dict(),
+        #     'epoch': pack.start_epoch,
+        #     'args': pack.args
+        # }
+        # image_util.save_on_master(
+        #     checkpoint,
+        #     os.path.join(pack.args.save_root, f"{pack.client}_model_{pack.start_epoch}.pth"))
+        #
+        # image_util.save_on_master(
+        #     checkpoint,
+        #     os.path.join(pack.args.save_root, f'{pack.client}_checkpoint.pth'))
 
-        print(confmat)
-        checkpoint = {
-            'model': model.state_dict(),
-            'optimizer': pack.optimizer.state_dict(),
-            'lr_scheduler': pack.lr_scheduler.state_dict(),
-            'epoch': pack.epoch,
-            'args': pack.args
-        }
-        image_util.save_on_master(
-            checkpoint,
-            os.path.join(pack.args.save_root, f"{pack.client}_model_{pack.start_epoch+1}.pth"))
+        result = defaultdict()
 
-        image_util.save_on_master(
-            checkpoint,
-            os.path.join(pack.args.save_root, f'{pack.client}_checkpoint.pth'))
+        result['params'] = copy.deepcopy(model.state_dict())
+        result['state'] = int(pack.start_epoch) + 1
+        result['data_len'] = len(pack.data_loader)
+        result['data_info'] = ''
+        print(f"Client RUN :: {pack.client} END \n {'--'*30}")
+        pack.flush()  # flush dataloader
 
-        pack.start_epoch += 1
-        return model, pack
+        return result
 
 
 class SegmentValidator(BaseLearner):
