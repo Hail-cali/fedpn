@@ -10,6 +10,7 @@ import copy
 import os
 import torchvision
 
+
 def pad_if_smaller(img, size, fill=0):
     min_size = min(img.size)
     if min_size < size:
@@ -200,7 +201,10 @@ def get_clinet_coco(root, image_set, transforms, cat_type='client_all'):
               'client_vehicle':[0, 5,2,3,6,7,9, 4],
               'client_obj':[0, 72, 44, 63, 62, 67],
               'client_all':[0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
-                1, 64, 20, 63, 7, 72]}
+                1, 64, 20, 63, 7, 72],
+              'client_almost': [0, 5, 2, 16, 62, 21, 67, 18, 19, 4,
+                             1, 64, 20, 63, 7, 72],
+              }
     cat_list = mapper[cat_type]
 
     print(f'{cat_type}: {cat_list}')

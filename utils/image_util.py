@@ -272,6 +272,14 @@ def save_on_master(*args, **kwargs):
         torch.save(*args, **kwargs)
 
 
+def make_dir(path):
+    if os.path.exists(path):
+        pass
+    else:
+        os.makedirs(path)
+
+
+
 def init_distributed_mode(args):
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ["RANK"])
