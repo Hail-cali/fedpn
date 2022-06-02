@@ -97,6 +97,7 @@ def main():
     device = torch.device(args.use_cuda)
     print(torch.cuda.current_device())
     print(args)
+
     if args.tensorboard:
         from tensorboardX import SummaryWriter
 
