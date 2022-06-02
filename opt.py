@@ -22,9 +22,13 @@ def parse_opt():
 
     # gpu & multi processing
     parser.add_argument('--distributed', default=False, type=bool)
-    parser.add_argument('--workers', default=2, type=int)
-    parser.add_argument('--gpu', default=3, type=int, help='use gpu num')
+    parser.add_argument('--workers', default=3, type=int)
+    parser.add_argument('--gpu', default=0,  help='use gpu num')
     parser.add_argument('--use_cuda', action='store_true', help='If true, use GPU.')
+    parser.add_argument('--rank', default=3)
+    parser.add_argument('--world-size', default=2, type=int,
+                        help='number of distributed processes')
+    parser.add_argument('--dist-url', default='file://home/hail09/FedPn/distributed_file_sys/some.txt', help='url used to set up distributed training env://')
 
     parser.add_argument('--device', default='cpu', help='allocated in api')
 
@@ -62,9 +66,12 @@ def parse_opt():
     parser.add_argument('--client_type', default='client_all', type=str,
                         help = 'client_obj | client_animal | client_vehicle | client_all')
 
-    parser.add_argument('--num_clients', default=3)
+    parser.add_argument('--num_clients', default=2)
     parser.add_argument('--update_status', default=False, help='is needed to update params from cluster')
     parser.add_argument('--global_model_path', default='global.pth')
+    parser.add_argument('--global_gpu_set', default=True)
+
+    parser.add_argument('--verbose', default=False)
 
     args = parser.parse_args()
     return args
