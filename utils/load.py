@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import torch
 from torchvision.transforms import functional as F
+import sys
 
 
 def load_state_dict_from_local_path(path, model_dir, map_location):
@@ -45,9 +46,9 @@ class ImageDataset(data.Dataset):
         return len(self.X)
 
 
-
 class Config:
     def __init__(self, json_path):
+
         with open(json_path, mode='r') as io:
             params = json.loads(io.read())
         self.__dict__.update(params)

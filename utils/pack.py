@@ -6,6 +6,7 @@ import torch
 from utils import image_util
 
 
+
 def get_dataset(dir_path, name, image_set, transform, client='client_all'):
     def sbd(*args, **kwargs):
         return torchvision.datasets.SBDataset(*args, mode='segmentation', **kwargs)
@@ -31,6 +32,69 @@ def get_transform(train):
     return presets.SegmentationPresetTrain(base_size, crop_size) if train else presets.SegmentationPresetEval(base_size)
 
 
+def init_force_distributed_mode(args):
+
+    args.distributed = True
+    torch.cuda.set_device(args.gpu)
+    args.dist_backend = 'nccl'
+    print('| distributed init (rank {}): {}'.format(
+        args.rank, args.dist_url), flush=True)
+    torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+                                         world_size=args.world_size, rank=args.rank)
+    setup_for_distributed(args.rank == 0)
+
+
+def init_distributed_mode(args):
+    # print('debug ')
+    # print(os.environ.keys())
+    # print(torch.cuda.device_count())
+
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        args.rank = int(os.environ["RANK"])
+        args.world_size = int(os.environ['WORLD_SIZE'])
+        args.gpu = int(os.environ['LOCAL_RANK'])
+    elif 'SLURM_PROCID' in os.environ:
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.gpu = args.rank % torch.cuda.device_count()
+    elif hasattr(args, "rank"):
+        pass
+    else:
+        print('Not using distributed mode')
+        args.distributed = False
+        return
+
+    args.distributed = True
+
+    torch.cuda.set_device(args.gpu)
+    # args.dist_backend = 'gloo'
+    args.dist_backend = 'nccl'
+    print('| distributed init (rank {}): {}'.format(
+        args.rank, args.dist_url), flush=True)
+
+    # torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+    #                                      world_size=args.world_size, rank=args.rank)
+
+    torch.distributed.init_process_group(backend=args.dist_backend, init_method='file:///mnt/nfs/sharedfile',
+                                         world_size=args.world_size, rank=args.rank)
+
+    setup_for_distributed(args.rank == 0)
+
+
+def setup_for_distributed(is_master):
+    """
+    This function disables printing when not in master process
+    """
+    import builtins as __builtin__
+    builtin_print = __builtin__.print
+
+    def print(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        if is_master or force:
+            builtin_print(*args, **kwargs)
+
+    __builtin__.print = print
+
+
 class LoaderPack:
 
     def __init__(self, args, client=None, dynamic=False, train_loader=None, val_loader=None, test_loader=None,
@@ -39,8 +103,8 @@ class LoaderPack:
         self.args = args
         self.client = client
         self.start_epoch = args.start_epoch
-        self.cfg_path = self.args.cfg_path
-
+        self.cfg_path = os.path.join(self.args.root, self.args.cfg_path[2:])
+        self.data_path = os.path.join(self.args.root, self.args.data_path)
         self.dynamic = dynamic
 
         self.train_loader = train_loader
@@ -59,10 +123,14 @@ class LoaderPack:
         # self.losses_avg = None
         # self.accuracies_avg = None
     def set_loader(self, config):
-        dataset, num_classes = get_dataset(self.args.data_path, self.args.dataset, "train", get_transform(train=True),
-                                           client=self.args.client_type)
+        if self.args.distributed:
+            init_distributed_mode(self.args)
+        # init_force_distributed_mode(self.args)
 
-        dataset_test, _ = get_dataset(self.args.data_path, self.args.dataset, "val", get_transform(train=False))
+        dataset, num_classes = get_dataset(self.data_path, self.args.dataset, "train", get_transform(train=True),
+                                           client=self.client)
+
+        dataset_test, _ = get_dataset(self.data_path, self.args.dataset, "val", get_transform(train=False))
 
         if self.args.distributed:
             train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
@@ -83,7 +151,13 @@ class LoaderPack:
 
     def set_local_gpu(self, status):
         import torch
-        self.args.use_cuda = f'cuda:{self.args.gpu}' if torch.cuda.is_available() else 'cpu'
+        # local_gpu = {'client_animal':0, 'client_vehicle':1, 'client_almost':2,
+        #           'client_obj':3, 'client_all':0}
+
+        local_gpu = {'client_animal': 1, 'client_vehicle': 3, 'client_almost': 3,
+                     'client_obj': 0, 'client_all': 0}
+
+        self.args.use_cuda = f'cuda:{local_gpu[self.client]}' if torch.cuda.is_available() else 'cpu'
         return torch.device(self.args.use_cuda)
 
     def flush(self):

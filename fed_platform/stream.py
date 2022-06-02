@@ -3,7 +3,7 @@ import asyncio
 import requests
 from queue import PriorityQueue
 import time
-from cluster import Cluster, SegmentationCluster
+from fed_platform.cluster import Cluster, SegmentationCluster
 
 TIMEOUT = 3000
 '''
@@ -66,7 +66,7 @@ class FedStream(BaseStream):
     '''
     def __init__(self, *args, **kwargs):
         super(FedStream, self).__init__(*args, **kwargs)
-        # self.reader: FedReader
+        self.reader: FedReader
         if self.check_status(self.reader):
             print('super init', self.reader)
 
@@ -130,18 +130,21 @@ class FedReader(BaseReader):
 
     def __init__(self, model_map_locate=None, cluster=None):
         super(FedReader).__init__()
-        self.map_model = model_map_locate   # func
+        self.map_model = model_map_locate   # func before allocate
         self.cluster : Cluster = cluster
 
-    async def run(self, packer):
+    def __repr__(self):
+        return f"{self.__class__} :: BASE Cluster: {self.cluster} BASE NET: {self.map_model}"
+
+    async def run(self, pack):
         '''
         :param loader:
         :return: fed model parmas
         '''
-        if issubclass(self.session, Cluster):
-            async with self.cluster(self.map_model, packer) as response:
-                result = response
-                return result
+
+        async with self.cluster(self.map_model, pack) as response:
+            result = response
+            return result
 
 
 class BaseWriter:
