@@ -1,20 +1,71 @@
-import torch.nn as nn
+
 import torch
-# from model.layer import base_models
+
 from model.new_layer import base_models
 from torchvision.models.segmentation._utils import _SimpleSegmentationModel
+
+from collections import OrderedDict
+from torch import nn
+from torch.nn import functional as F
 
 
 class FedPN(_SimpleSegmentationModel):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, global_classifier=None, *args, **kwargs):
         super(FedPN, self).__init__(*args, **kwargs)
-        self.global_bb = 'test net'
+        self.global_classifier = global_classifier
+        print(global_classifier)
 
+    def forward(self,x):
+        input_shape = x.shape[-2:]
+        # contract: features is a dict of tensors
+        features = self.backbone(x)
 
+        result = OrderedDict()
+        x = features["out"]
+        x = self.classifier(x)
+        x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
+        result["out"] = x
 
+        if self.aux_classifier is not None:
+            x = features["aux"]
+            x = self.aux_classifier(x)
+            x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
+            result["aux"] = x
 
+        if self.global_classifier is not None:
+            x = features["g_net"]
+            x = self.global_classifier(x)
+            x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
+            result["g_net"] = x
 
+        return result
+
+    #
+    # def __init__(self, backbone, classifier, aux_classifier=None):
+    #     super(_SimpleSegmentationModel, self).__init__()
+    #     self.backbone = backbone
+    #     self.classifier = classifier
+    #     self.aux_classifier = aux_classifier
+    #
+    # def forward(self, x):
+    #     input_shape = x.shape[-2:]
+    #     # contract: features is a dict of tensors
+    #     features = self.backbone(x)
+    #
+    #     result = OrderedDict()
+    #     x = features["out"]
+    #     x = self.classifier(x)
+    #     x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
+    #     result["out"] = x
+    #
+    #     if self.aux_classifier is not None:
+    #         x = features["aux"]
+    #         x = self.aux_classifier(x)
+    #         x = F.interpolate(x, size=input_shape, mode='bilinear', align_corners=False)
+    #         result["aux"] = x
+    #
+    #     return result
 
 
 

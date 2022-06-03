@@ -27,6 +27,7 @@ def _hail_mobilenetv3(
         backbone: mobilenetv3.MobileNetV3,
         num_classes: int,
         aux: Optional[bool],
+        g_net: Optional[bool],
 ):
     backbone = backbone.features
 
@@ -37,16 +38,24 @@ def _hail_mobilenetv3(
     aux_inplanes = backbone[aux_pos].out_channels
     return_layers = {str(out_pos): "out"}
     if aux:
+        print('aux')
         return_layers[str(aux_pos)] = "aux"
+
+    global_stage = [11, 12, 13]
+    global_stage_indices = [i for i, b in enumerate(backbone) if i in global_stage]
+    g_net_pos = global_stage_indices[0]
+    g_net_inplanes = backbone[g_net_pos].out_channels
+
+    if g_net:
+        return_layers[str(g_net_pos)] = "g_net"
+
     backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)
 
-    global_stage = {'11':'global','12':'global','13':'global'}
-
-    global_net = backbone
-
     aux_classifier = FCNHead(aux_inplanes, num_classes) if aux else None
+    global_classifier = FCNHead(g_net_inplanes, num_classes) if g_net else None
     classifier = DeepLabHead(out_inplanes, num_classes)
-    return FedPN(backbone, classifier, aux_classifier)
+    return FedPN(global_classifier, backbone, classifier, aux_classifier)
+    # return FedPN(backbone, classifier, aux_classifier)
     # return DeepLabV3(backbone, classifier, aux_classifier)
 
 
@@ -57,14 +66,15 @@ def hail_mobilenet_v3_large(
         progress:bool = True,
         num_classes: int = 21,
         pretrained_backbone: bool = True,
-        aux_loss: Optional[int] = True):
+        aux_loss: Optional[int] = True,
+        global_loss: Optional[int] = True):
 
     if pretrained:
         aux_loss = True
         pretrained_backbone = False
 
     backbone = mobilenetv3.mobilenet_v3_large(pretrained=pretrained_backbone, dilated=True)
-    model = _hail_mobilenetv3(backbone, num_classes, aux_loss)
+    model = _hail_mobilenetv3(backbone, num_classes, aux_loss, global_loss)
 
     if pretrained:
         arch = "deeplabv3_mobilenet_v3_large_coco"

@@ -16,8 +16,10 @@ def seg_criterion(inputs, target):
 
     if len(losses) == 1:
         return losses['out']
-
-    return losses['out'] + 0.5 * losses['aux']
+    if len(losses) == 2:
+        return losses['out'] + 0.5 * losses['aux']
+    if len(losses) == 3:
+        return losses['out'] + 0.5 * losses['aux'] + 0.2 * losses['g_net']
 
 
 class ComputeAvg(object):
@@ -122,10 +124,27 @@ class BaseLearner:
         return confmat
 
     @classmethod
-    def update_state_dict_(self, model, pack):
+    def update_state_dict_full(self, model, pack):
 
+        if os.path.exists(pack.load_local_client_path) and pack.args.start_epoch != 0:
+            checkpoint = torch.load(pack.load_local_client_path, map_location='cpu')
+            model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
+            if not pack.args.test_only:
 
-        pass
+                pack.optimizer.load_state_dict(checkpoint['optimizer'])
+                pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+                pack.args.start_epoch = checkpoint['epoch'] + 1
+
+            print(f'Updated state dict{pack.start_epoch}')
+        else:
+            print(f'Start Phase or check resume path: {pack.args.resume}')
+
+        if pack.update_global_path:
+            checkpoint = torch.load(pack.update_global_path, map_location='cpu')
+            model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
+            pack.args.update_status = False
+            print('Update Global model')
+
 
     def update_state_dict(self, model, pack):
         '''
@@ -162,27 +181,28 @@ class SegmentTrainer(BaseLearner):
         :return:
         '''
 
-        self.update_state_dict(model, pack)  # if args.resume init, update optim, lr_scheduler, start_epoch
+        # self.update_state_dict(model, pack)  # if args.resume init, update optim, lr_scheduler, start_epoch
+        self.update_state_dict_full(model, pack)
         print(f"{'--'*30} \n Client RUN :: {pack.client} START || IN {pack.device}")
 
-        # self.train_one_epoch(model, pack)
-        # confmat = self.evaluate(model, pack)
-        # print(f"|| Client Validate :: {pack.client} ")
-        # print(confmat)
-        # checkpoint = {
-        #     'model': model.state_dict(),
-        #     'optimizer': pack.optimizer.state_dict(),
-        #     'lr_scheduler': pack.lr_scheduler.state_dict(),
-        #     'epoch': pack.start_epoch,
-        #     'args': pack.args
-        # }
-        # image_util.save_on_master(
-        #     checkpoint,
-        #     os.path.join(pack.args.save_root, f"{pack.client}_model_{pack.start_epoch}.pth"))
-        #
-        # image_util.save_on_master(
-        #     checkpoint,
-        #     os.path.join(pack.args.save_root, f'{pack.client}_checkpoint.pth'))
+        self.train_one_epoch(model, pack)
+        confmat = self.evaluate(model, pack)
+        print(f"|| Client Validate :: {pack.client} ")
+        print(confmat)
+        checkpoint = {
+            'model': model.state_dict(),
+            'optimizer': pack.optimizer.state_dict(),
+            'lr_scheduler': pack.lr_scheduler.state_dict(),
+            'epoch': pack.start_epoch,
+            'args': pack.args
+        }
+        image_util.save_on_master(
+            checkpoint,
+            os.path.join(pack.args.save_root, f"{pack.client}_model_{pack.start_epoch}.pth"))
+
+        image_util.save_on_master(
+            checkpoint,
+            os.path.join(pack.args.save_root, f'{pack.client}_checkpoint.pth'))
 
         result = defaultdict()
 
@@ -203,7 +223,7 @@ class SegmentValidator(BaseLearner):
 
     def __call__(self, model, pack):
         res = self.evaluate(model, pack)
-
+        print(res)
         return res
 
 

@@ -181,6 +181,18 @@ class LoaderPack:
         else:
             return os.path.join(self.args.save_root, self.args.global_model_path)
 
+    @property
+    def load_local_client_path(self):
+        return os.path.join(self.args.resume, f"{self.client}_model_{self.start_epoch}.pth" )
+
+    @property
+    def update_global_path(self):
+        if self.args.update_status:
+            print(f'Update status of Global model | stored status:{self.args.update_status}|')
+            return os.path.join(self.args.save_root, self.args.global_model_path)
+
+        else:
+            print(f'Check update status of Global model | stored status:{self.args.update_status}|')
 
 class GeneratePack(LoaderPack):
 
