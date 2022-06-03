@@ -30,12 +30,13 @@ def fed_aggregate_avg(agg, results):
     # result['data_info']
     size = 1
     # agg.to('cpu')
-
+    lst = ['11','12','13']
     for client in results:
         # client.to('cpu')
         for k, v in client['params'].items():
-            agg[k] += (v * client['data_len'])
-            size += client['data_len']
+            if k[:2] in lst:
+                agg[k] += (v * client['data_len'])
+                size += client['data_len']
 
     print('debug', size, len(results))
 
@@ -53,7 +54,7 @@ def fed_aggregate_avg(agg, results):
         elif isinstance(v, int):
             agg[k] = v / size
 
-    print(agg)
+
 
 
 
@@ -182,6 +183,7 @@ class LocalAPI:
 
         if load == 'cpu':
             pass
+
         base_agg.to(self.args.device)
         self.base_agg = base_agg.state_dict()
 
@@ -217,7 +219,6 @@ class LocalAPI:
         finished = await asyncio.wait(tasks)
         print(finished)
 
-
         for job in finished:
             while job:
                 task = job.pop()
@@ -241,7 +242,8 @@ class LocalAPI:
             if self.verbose:
                 print(task.result())
         print("unfinished:", len(unfinished))
-        loop.close()
+        loop.is_closed()
+        # loop.close()
         return result
 
     def aggregation(self, data, epoch):
@@ -283,6 +285,7 @@ class LocalAPI:
         self.args.start_epoch += 1
         self.aggregation(data, self.args.start_epoch)
         self.args.update_status = True
+        self.clients.clear()
 
     def execute(self):
 
@@ -296,7 +299,6 @@ class LocalAPI:
             print(f'round {round} start ')
             self.set_phase()
             result = self.train_phase()
-
             self.deploy_phase(result)
             self.test()
 

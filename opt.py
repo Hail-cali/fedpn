@@ -51,7 +51,7 @@ def parse_opt():
 
     parser.add_argument('--train_size', default=0.8)
 
-    parser.add_argument('--epochs', default=1, type=int)
+    parser.add_argument('--epochs', default=3, type=int)
     parser.add_argument('--start_epoch', default=0, type=int)
     parser.add_argument('--aux_loss', default=True, type=bool)
     parser.add_argument('--resume', default='',
@@ -66,7 +66,7 @@ def parse_opt():
     parser.add_argument('--client_type', default='client_all', type=str,
                         help = 'client_obj | client_animal | client_vehicle | client_all')
 
-    parser.add_argument('--num_clients', default=2)
+    parser.add_argument('--num_clients', default=3)
     parser.add_argument('--update_status', default=False, help='is needed to update params from cluster')
     parser.add_argument('--global_model_path', default='global.pth')
     parser.add_argument('--global_gpu_set', default=True)
