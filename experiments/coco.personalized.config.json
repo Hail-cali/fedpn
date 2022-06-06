@@ -1,0 +1,12 @@
+{
+  "ar" : 1,
+
+  "num_classes": 21,
+  "bias_heads": 0,
+
+  "batch_size": 20,
+
+  "lr": 0.004,
+  "momentum":0.9,
+  "wd":1e-4
+}

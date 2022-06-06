@@ -14,7 +14,7 @@ class FedPN(_SimpleSegmentationModel):
     def __init__(self, global_classifier=None, *args, **kwargs):
         super(FedPN, self).__init__(*args, **kwargs)
         self.global_classifier = global_classifier
-        print(global_classifier)
+
 
     def forward(self,x):
         input_shape = x.shape[-2:]

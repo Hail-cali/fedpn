@@ -146,7 +146,7 @@ class ConvertCocoPolysToMask(object):
         target = Image.fromarray(target.numpy())
         return image, target
 
-def _coco_remove_images_without_annotations(dataset, cat_list=None):
+def _coco_remove_images_without_annotations(dataset, cat_list=None, skip=False):
     def _has_valid_annotation(anno):
         # if it's empty, there is no annotation
         if len(anno) == 0:
@@ -157,10 +157,15 @@ def _coco_remove_images_without_annotations(dataset, cat_list=None):
     assert isinstance(dataset, torchvision.datasets.CocoDetection)
     ids = []
     for ds_idx, img_id in enumerate(dataset.ids):
+
+        if skip and ds_idx % 4 == 0:
+            continue
+
         ann_ids = dataset.coco.getAnnIds(imgIds=img_id, iscrowd=None)
         anno = dataset.coco.loadAnns(ann_ids)
         if cat_list:
             anno = [obj for obj in anno if obj["category_id"] in cat_list]
+
         if _has_valid_annotation(anno):
             ids.append(ds_idx)
 
@@ -197,21 +202,32 @@ def get_coco(root, image_set, transforms):
 
 def get_clinet_coco(root, image_set, transforms, cat_type='client_all'):
 
-    mapper = {'client_animal':[0, 16, 20, 17, 21, 18, 19],
-              'client_vehicle':[0, 5,2,3,6,7,9, 4],
-              'client_obj':[0, 72, 44, 63, 62, 67],
+    mapper = {'client_animal':[0, 1,16, 20, 17, 21, 18, 19],
+              'client_vehicle':[0,1, 5, 2, 3, 6, 7, 9, 4, 16],
+              'client_obj':[0,1, 72, 44, 63, 62, 67],
+
               'client_all':[0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
                 1, 64, 20, 63, 7, 72],
-              'client_almost': [0, 5, 2, 16, 62, 21, 67, 18, 19, 4,
+
+              'global': [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
                              1, 64, 20, 63, 7, 72],
+
+              'server': [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
+                         1, 64, 20, 63, 7, 72],
+
+              'client_almost': [0, 5, 2, 16, 6, 3, 17, 62, 21, 67, 18, 19, 4, 64, 20, 7, 72],
+
+              'client_half':[0, 16, 62,  67, 18, 19, 4, 1, 64, 63, 7, 72, 44, 5]
               }
+
     cat_list = mapper[cat_type]
 
-    print(f'{cat_type}: {cat_list}')
+    # print(f'{cat_type}: {cat_list}')
+
     PATHS = {
         "train": ("train2017", os.path.join("annotations", "instances_train2017.json")),
         "val": ("val2017", os.path.join("annotations", "instances_val2017.json")),
-        # "train": ("val2017", os.path.join("annotations", "instances_val2017.json"))
+        "global": ("train2017", os.path.join("annotations", "instances_train2017.json"))
     }
     # CAT_LIST = [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
     #             1, 64, 20, 63, 7, 72]
@@ -237,6 +253,12 @@ def get_clinet_coco(root, image_set, transforms, cat_type='client_all'):
     dataset = torchvision.datasets.CocoDetection(img_folder, ann_file, transforms=transforms)
 
     if image_set == "train":
+        dataset = _coco_remove_images_without_annotations(dataset, cat_list)
+
+    if image_set == "global":
+        dataset = _coco_remove_images_without_annotations(dataset, cat_list, skip=True)
+
+    if image_set == 'val':
         dataset = _coco_remove_images_without_annotations(dataset, cat_list)
 
     return dataset

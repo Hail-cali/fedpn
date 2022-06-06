@@ -38,7 +38,6 @@ def _hail_mobilenetv3(
     aux_inplanes = backbone[aux_pos].out_channels
     return_layers = {str(out_pos): "out"}
     if aux:
-        print('aux')
         return_layers[str(aux_pos)] = "aux"
 
     global_stage = [11, 12, 13]
@@ -67,11 +66,14 @@ def hail_mobilenet_v3_large(
         num_classes: int = 21,
         pretrained_backbone: bool = True,
         aux_loss: Optional[int] = True,
-        global_loss: Optional[int] = True):
+        global_loss: Optional[int] = False):
 
     if pretrained:
         aux_loss = True
+        global_loss = False
         pretrained_backbone = False
+    else:
+        pretrained_backbone = True
 
     backbone = mobilenetv3.mobilenet_v3_large(pretrained=pretrained_backbone, dilated=True)
     model = _hail_mobilenetv3(backbone, num_classes, aux_loss, global_loss)
