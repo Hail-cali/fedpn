@@ -15,7 +15,7 @@ def parse_opt():
     parser.add_argument('--readme', default='', type=str)
 
     # base setting (model, basenet, mode, pretrained)
-    parser.add_argument('--mode', default='train', help='train | inference | test ')
+    parser.add_argument('--mode', default='train', type=str, help='train | inference | test ')
     parser.add_argument('--single_mode', default=0, type=bool, help='when training on single site, use this opt in sh')
 
     parser.add_argument('--basenet', default='mobilenet', help='pretraiend base model')
@@ -71,6 +71,7 @@ def parse_opt():
     parser.add_argument('--tensorboard', default=True)
     parser.add_argument('--log_interval', default=100, type=int, help='Log interval for showing training loss')
     parser.add_argument('--max_log', default=20, type=int)
+
     # server Initialized
     parser.add_argument('--initial_cls', default='g_net_classifier.pth', type=str)
     parser.add_argument('--cls_path', default='', type=str)

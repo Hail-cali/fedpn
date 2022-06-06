@@ -119,6 +119,7 @@ class MetricLogger(object):
     def __init__(self, delimiter="\t"):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
+        self.total_time = 0
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -202,6 +203,7 @@ class MetricLogger(object):
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {}'.format(header, total_time_str))
+        self.total_time = round(total_time, 1)
 
 
 def cat_list(images, fill_value=0):

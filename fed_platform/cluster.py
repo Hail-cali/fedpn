@@ -14,12 +14,8 @@ import sys
 import numpy as np
 from tensorboardX import SummaryWriter
 
-
-
-
 TIMEOUT = 3000
 OVERFLOW  = 100000003
-
 
 
 def fed_aggregate_avg(agg, results, global_layers):
@@ -58,8 +54,6 @@ def fed_aggregate_avg(agg, results, global_layers):
 
         elif isinstance(v, int):
             agg[k] = v / size
-
-
 
 
 def fed_aggregate_(result):
@@ -160,7 +154,7 @@ class Cluster:
         else:
             checkpoint = torch.load(self.pack.args.cls_path, map_location='cpu')
             base_model.update(checkpoint['model'])
-            print(f':: Initialized, Start Phase or check resume path: {self.pack.args.resume}, {self.pack.args.cls_path}')
+            print(f':: Initialized on , Start Phase or check resume path: {self.pack.args.resume}, {self.pack.args.cls_path}')
 
         # update global model params
         if self.pack.update_global_path:
@@ -178,6 +172,9 @@ class Cluster:
             for param in child.parameters():
                 if name in ['classifier']:
                     param.requires_grad = False
+
+                elif name == 'backbone':
+                    pass
 
 
     async def __aenter__(self, *args):
@@ -208,7 +205,7 @@ class SegmentationCluster(Cluster):
 class LocalAPI:
 
     def __init__(self, args, base_steam=None, base_reader=None,
-                 base_net=None, base_cluster=None, global_gpu=True, verbose=False):
+                 base_net=None, base_cluster=None, writer=None, global_gpu=True, verbose=False):
 
         super(LocalAPI).__init__()
         self.args = args
@@ -216,19 +213,22 @@ class LocalAPI:
         print(self.args)
 
         self.mode = args.mode
+        if self.mode == 'val':
+            self.args.update_status = True
         self.net = base_net
         self.base_agg = None
 
-        self.cluster: Cluster = base_cluster
+        self.cluster: SegmentationCluster = base_cluster
         self.stream = base_steam
         self.reader = base_reader
 
         readme = args.readme
         readme += f"_{args.model_name}_client({args.num_clients}).aux({args.aux_loss}).global.({args.global_loss})"
         readme += f".freeze({args.freeze_cls}).deploy({args.deploy_cls})_{args.dataset}_save_{args.save_root.split('/')[-1]}"
-        self.writer = SummaryWriter(f'runs/{readme}')
-        # self.stream = base_steam(reader=base_reader(model_map_locate=self.net, cluster=self.cluster),
-        #                          writer=None)   # : FedStream
+        if writer:
+            self.writer = SummaryWriter(f'runs/{readme}')
+        else:
+            self.writer = None
 
         self.loop = asyncio.get_event_loop()
 
@@ -243,9 +243,11 @@ class LocalAPI:
         print(f'Global GPU Set {self.global_gpu} allocated on ')
 
         if self.args.single_mode == 0:
-            self.client_map = {0: 'client_animal', 1: 'client_vehicle', 2:'client_almost',
-                  3: 'client_half', 4: 'client_all', 5:'client_obj'}
 
+            # self.client_map = {0: 'client_animal', 1: 'client_vehicle', 2:'client_almost',
+            #       3: 'client_half', 4: 'client_all', 5:'client_obj'}
+            self.client_map = {0:'client_without_person',1:'client_without_car', 2:'client_without_dog',3:'client_all'}
+            print(self.client_map)
         else:
             self.client_map = {0:'client_all'}
             self.args.num_clients = 1
@@ -297,6 +299,8 @@ class LocalAPI:
 
         pack = LoaderPack(self.args, dynamic=False, val_loader=None, client='server', global_gpu=self.global_gpu)
         pack.tb_writer = self.writer
+
+
         dataset_test, _ = get_dataset(pack.data_path, self.args.dataset, "val", get_transform(train=False))
         if self.args.distributed:
             test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test)
@@ -382,7 +386,9 @@ class LocalAPI:
         print(f'total time {total_end-total_start:.5f}times')
         print(f"{'+' * 30}")
         self.loop.close()
-        self.writer.close()
+
+        if self.writer:
+            self.writer.close()
 
     def _generate_base_agg(self, load='cpu'):
         self.base_agg = None

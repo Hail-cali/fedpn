@@ -1,4 +1,5 @@
 import csv
+import time
 from collections import defaultdict
 import tqdm
 import torch
@@ -135,51 +136,16 @@ class BaseLearner:
         acc_global, acc, iu = confmat.compute()
 
         if pack.tb_writer:
-            pack.tb_writer.add_scalar(f"{pack.client}/mean_IoU", iu.mean().item() * 100, pack.start_epoch)
+            pack.tb_writer.add_scalar(f"{pack.client}/mean_IoU", iu.mean().item() * 100, pack.start_epoch+1)
             pack.tb_writer.add_text(f"{pack.client}/IoU", str(['{:.1f}'.format(i) for i in (iu * 100).tolist()]),
-                                    pack.start_epoch)
+                                    pack.start_epoch+1)
+            pack.tb_writer.add_scalar(f"{pack.client}/infer_time", metric_logger.total_time, pack.start_epoch+1)
 
             for name, params in model.named_parameters():
                 pack.tb_writer.add_histogram(f"{pack.client}/{name}", params.clone().cpu().data.numpy(),
-                                             pack.start_epoch)
+                                             pack.start_epoch+1)
 
         return confmat
-
-    # @classmethod
-    # def update_state_dict_full(self, model, pack):
-    #     base_model = model.state_dict()
-    #
-    #     # update full model parmas
-    #     if os.path.exists(pack.load_local_client_path) and pack.start_epoch != 0:
-    #         checkpoint = torch.load(pack.load_local_client_path, map_location='cpu')
-    #         # model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
-    #         base_model.update(checkpoint['model'])
-    #
-    #         if not pack.args.test_only:
-    #
-    #             pack.optimizer.load_state_dict(checkpoint['optimizer'])
-    #             pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-    #             pack.start_epoch = checkpoint['epoch'] + 1
-    #
-    #         print(f':: Updated state dict on CheckPoint({pack.start_epoch})')
-    #     else:
-    #         checkpoint = torch.load(pack.args.cls_path, map_location='cpu')
-    #         base_model.update(checkpoint['model'])
-    #         print(f':: Initialized, Start Phase or check resume path: {pack.args.resume}, {pack.args.cls_path}')
-    #
-    #     # update global model params
-    #     if pack.update_global_path:
-    #         checkpoint = torch.load(pack.update_global_path, map_location='cpu')
-    #         base_model.update(checkpoint['model'])
-    #         print(':: Update Global model on client model')
-    #     else:
-    #         print(f':: Initialized on Client model')
-    #
-    #     model.load_state_dict(base_model, strict=False)
-
-
-
-
 
 
 class SegmentTrainer(BaseLearner):
@@ -195,15 +161,11 @@ class SegmentTrainer(BaseLearner):
         :return:
         '''
 
-        # if pack.client != 'global':
-        #     self.update_state_dict_full(model, pack)
+        start_time = time.time()
         print(f"{'--'*30} \n Client RUN :: {pack.client} START || IN {pack.device}")
         self.train_one_epoch(model, pack)
         confmat = self.evaluate(model, pack)
         print(f"|| Client Validate :: {pack.client} ")
-
-
-
         print(confmat)
 
         checkpoint = {
@@ -222,6 +184,8 @@ class SegmentTrainer(BaseLearner):
             for k, v in checkpoint['model'].items():
                 if pack.args.deploy_cls:
                     if k.split('.')[0] in chk_cls:
+                        gls_checkpoint['model'][k] = v
+                    elif k.split('.')[0] == 'backbone' and k.split('.')[1] in ['4','11','12','13']:
                         gls_checkpoint['model'][k] = v
                 else:
                     gls_checkpoint['model'][k] = v
@@ -248,6 +212,11 @@ class SegmentTrainer(BaseLearner):
         result['data_len'] = copy.deepcopy(len(pack.data_loader))
         result['data_info'] = {'client_name':copy.deepcopy(pack.client), 'cls_info':[]}
         print(f"Client RUN :: {pack.client} END \n {'--'*30}")
+
+        end_time = time.time() - start_time
+        if pack.tb_writer:
+            pack.tb_writer.add_scalar(f"{pack.client}/epoch_run_time", round(end_time, 1), pack.start_epoch+1)
+
         pack.flush()  # flush dataloader
 
         return result
@@ -260,6 +229,7 @@ class SegmentValidator(BaseLearner):
 
     def __call__(self, model, pack):
         res = self.evaluate(model, pack)
+        print(f"|| Client Validate :: {pack.client} ")
         print(res)
         return res
 
