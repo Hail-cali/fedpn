@@ -9,6 +9,8 @@ from utils import image_util
 import copy
 from utils.load import Config
 
+
+
 def seg_criterion(inputs, target):
     losses = {}
     for name, x in inputs.items():
@@ -86,10 +88,14 @@ class BaseLearner:
 
     def train_one_epoch(self, model, pack):
         model.train()
+        # print(pack.tb_writer)
         metric_logger = image_util.MetricLogger(delimiter="  ")
         metric_logger.add_meter('lr', image_util.SmoothedValue(window_size=1, fmt='{value}'))
         header = 'Epoch: [{}]'.format(pack.start_epoch)
+        i = 0
+        c = 1
         for image, target in metric_logger.log_every(pack.data_loader, pack.args.log_interval, header):
+
             image, target = image.to(pack.device), target.to(pack.device)
             output = model(image)
             loss = pack.criterion(output, target)
@@ -102,6 +108,11 @@ class BaseLearner:
 
             metric_logger.update(loss=loss.item(), lr=pack.optimizer.param_groups[0]["lr"])
 
+            if pack.tb_writer:
+                if i%pack.args.log_interval==0 and c <= pack.args.max_log:
+                    pack.tb_writer.add_scalar(f"{pack.client}/train_step_loss", round(loss.item(),4), c+(pack.start_epoch*pack.args.max_log))
+                    c += 1
+            i += 1
         print(metric_logger)
 
     def evaluate(self, model, pack):
@@ -121,50 +132,54 @@ class BaseLearner:
 
             confmat.reduce_from_all_processes()
 
+        acc_global, acc, iu = confmat.compute()
+
+        if pack.tb_writer:
+            pack.tb_writer.add_scalar(f"{pack.client}/mean_IoU", iu.mean().item() * 100, pack.start_epoch)
+            pack.tb_writer.add_text(f"{pack.client}/IoU", str(['{:.1f}'.format(i) for i in (iu * 100).tolist()]),
+                                    pack.start_epoch)
+
+            for name, params in model.named_parameters():
+                pack.tb_writer.add_histogram(f"{pack.client}/{name}", params.clone().cpu().data.numpy(),
+                                             pack.start_epoch)
+
         return confmat
 
-    @classmethod
-    def update_state_dict_full(self, model, pack):
+    # @classmethod
+    # def update_state_dict_full(self, model, pack):
+    #     base_model = model.state_dict()
+    #
+    #     # update full model parmas
+    #     if os.path.exists(pack.load_local_client_path) and pack.start_epoch != 0:
+    #         checkpoint = torch.load(pack.load_local_client_path, map_location='cpu')
+    #         # model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
+    #         base_model.update(checkpoint['model'])
+    #
+    #         if not pack.args.test_only:
+    #
+    #             pack.optimizer.load_state_dict(checkpoint['optimizer'])
+    #             pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+    #             pack.start_epoch = checkpoint['epoch'] + 1
+    #
+    #         print(f':: Updated state dict on CheckPoint({pack.start_epoch})')
+    #     else:
+    #         checkpoint = torch.load(pack.args.cls_path, map_location='cpu')
+    #         base_model.update(checkpoint['model'])
+    #         print(f':: Initialized, Start Phase or check resume path: {pack.args.resume}, {pack.args.cls_path}')
+    #
+    #     # update global model params
+    #     if pack.update_global_path:
+    #         checkpoint = torch.load(pack.update_global_path, map_location='cpu')
+    #         base_model.update(checkpoint['model'])
+    #         print(':: Update Global model on client model')
+    #     else:
+    #         print(f':: Initialized on Client model')
+    #
+    #     model.load_state_dict(base_model, strict=False)
 
-        if os.path.exists(pack.load_local_client_path) and pack.args.start_epoch != 0:
-            checkpoint = torch.load(pack.load_local_client_path, map_location='cpu')
-            model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
-            if not pack.args.test_only:
-
-                pack.optimizer.load_state_dict(checkpoint['optimizer'])
-                pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-                pack.args.start_epoch = checkpoint['epoch'] + 1
-
-            print(f'Updated state dict{pack.start_epoch}')
-        else:
-            print(f'Start Phase or check resume path: {pack.args.resume}')
-
-        if pack.update_global_path:
-            checkpoint = torch.load(pack.update_global_path, map_location='cpu')
-            model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
-            pack.args.update_status = False
-            print('Update Global model')
 
 
-    def update_state_dict(self, model, pack):
-        '''
-        :Set if start_epoch not first and pth path exits, update state_dict
-        :param pack: LoaderPack
-        '''
 
-        if os.path.exists(pack.local_client_path) and pack.args.start_epoch != 0:
-            checkpoint = torch.load(pack.local_client_path, map_location='cpu')
-            model.load_state_dict(checkpoint['model'], strict=not pack.args.test_only)
-            if not pack.args.test_only:
-
-                pack.optimizer.load_state_dict(checkpoint['optimizer'])
-                pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-                pack.args.start_epoch = checkpoint['epoch'] + 1
-
-            print('Updated state dict')
-
-        else:
-            print(f'Can not load state dict, Check args resume path: {pack.args.resume}')
 
 
 class SegmentTrainer(BaseLearner):
@@ -173,7 +188,6 @@ class SegmentTrainer(BaseLearner):
         super(SegmentTrainer, self).__init__()
 
     def __call__(self, model, pack):
-
         '''
         train one epoch
         :param model: allocated model
@@ -181,14 +195,17 @@ class SegmentTrainer(BaseLearner):
         :return:
         '''
 
-        # self.update_state_dict(model, pack)  # if args.resume init, update optim, lr_scheduler, start_epoch
-        self.update_state_dict_full(model, pack)
+        # if pack.client != 'global':
+        #     self.update_state_dict_full(model, pack)
         print(f"{'--'*30} \n Client RUN :: {pack.client} START || IN {pack.device}")
-
         self.train_one_epoch(model, pack)
         confmat = self.evaluate(model, pack)
         print(f"|| Client Validate :: {pack.client} ")
+
+
+
         print(confmat)
+
         checkpoint = {
             'model': model.state_dict(),
             'optimizer': pack.optimizer.state_dict(),
@@ -196,20 +213,40 @@ class SegmentTrainer(BaseLearner):
             'epoch': pack.start_epoch,
             'args': pack.args
         }
-        image_util.save_on_master(
-            checkpoint,
-            os.path.join(pack.args.save_root, f"{pack.client}_model_{pack.start_epoch}.pth"))
 
-        image_util.save_on_master(
-            checkpoint,
-            os.path.join(pack.args.save_root, f'{pack.client}_checkpoint.pth'))
+        if pack.client == 'global':
+            from collections import OrderedDict
+            gls_checkpoint = {'model': OrderedDict()}
+            chk_cls = ['classifier', 'aux_classifier', 'global_classifier']
+
+            for k, v in checkpoint['model'].items():
+                if pack.args.deploy_cls:
+                    if k.split('.')[0] in chk_cls:
+                        gls_checkpoint['model'][k] = v
+                else:
+                    gls_checkpoint['model'][k] = v
+
+            image_util.save_on_master(
+                gls_checkpoint,
+                pack.args.cls_path)
+            pack.flush()
+            return
+
+        else:
+            image_util.save_on_master(
+                checkpoint,
+                os.path.join(pack.args.save_root, f"{pack.client}_model_{pack.start_epoch}.pth"))
+
+            image_util.save_on_master(
+                checkpoint,
+                os.path.join(pack.args.save_root, f'{pack.client}_checkpoint.pth'))
 
         result = defaultdict()
 
         result['params'] = copy.deepcopy(model.state_dict())
-        result['state'] = int(pack.start_epoch) + 1
-        result['data_len'] = len(pack.data_loader)
-        result['data_info'] = ''
+        result['state'] = copy.deepcopy(int(pack.start_epoch) + 1)
+        result['data_len'] = copy.deepcopy(len(pack.data_loader))
+        result['data_info'] = {'client_name':copy.deepcopy(pack.client), 'cls_info':[]}
         print(f"Client RUN :: {pack.client} END \n {'--'*30}")
         pack.flush()  # flush dataloader
 
