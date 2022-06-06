@@ -10,14 +10,8 @@ from opt import parse_opt
 
 if __name__ == '__main__':
     args = parse_opt()
-    print(args)
 
     running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=hail_mobilenet_v3_large,
                        base_cluster=SegmentationCluster, global_gpu=args.global_gpu_set, verbose=False)
-
-    # running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=hail_mobilenet_v3_large,
-    #                    base_cluster=SegmentationCluster, global_gpu=False, verbose=False)
-
-    # print(running)
 
     running.execute()
