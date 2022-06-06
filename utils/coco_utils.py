@@ -158,7 +158,7 @@ def _coco_remove_images_without_annotations(dataset, cat_list=None, skip=False):
     ids = []
     for ds_idx, img_id in enumerate(dataset.ids):
 
-        if skip and ds_idx % 4 == 0:
+        if skip and ds_idx % 2 == 0:
             continue
 
         ann_ids = dataset.coco.getAnnIds(imgIds=img_id, iscrowd=None)
@@ -220,6 +220,13 @@ def get_clinet_coco(root, image_set, transforms, cat_type='client_all'):
               'client_half':[0, 16, 62,  67, 18, 19, 4, 1, 64, 63, 7, 72, 44, 5]
               }
 
+    new = {'client_without_person':[0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
+                             64, 20, 63, 7, 72],
+           'client_without_car':[0, 5, 2, 16, 9, 44, 6,  17, 62, 21, 67, 18, 19, 4,
+                             1, 64, 20, 63, 7, 72],
+           'client_without_dog':[0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67,  19, 4,
+                             1, 64, 20, 63, 7, 72]}
+    mapper.update(new)
     cat_list = mapper[cat_type]
 
     # print(f'{cat_type}: {cat_list}')
@@ -258,8 +265,8 @@ def get_clinet_coco(root, image_set, transforms, cat_type='client_all'):
     if image_set == "global":
         dataset = _coco_remove_images_without_annotations(dataset, cat_list, skip=True)
 
-    if image_set == 'val':
-        dataset = _coco_remove_images_without_annotations(dataset, cat_list)
+    # if image_set == 'val':
+    #     dataset = _coco_remove_images_without_annotations(dataset, cat_list)
 
     return dataset
 

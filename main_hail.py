@@ -12,6 +12,6 @@ if __name__ == '__main__':
     args = parse_opt()
 
     running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=hail_mobilenet_v3_large,
-                       base_cluster=SegmentationCluster, global_gpu=args.global_gpu_set, verbose=False)
+                       base_cluster=SegmentationCluster, writer=True, global_gpu=args.global_gpu_set, verbose=False)
 
     running.execute()

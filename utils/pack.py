@@ -17,9 +17,13 @@ def get_dataset(dir_path, name, image_set, transform, client='client_all'):
     }
     p, ds_fn, num_classes = paths[name]
 
+    if name in['voc', 'voc_aug']:
+        ds = ds_fn(p, image_set='train_noval', transforms=transform)
+        return ds, num_classes
+
     if image_set == 'val':
-        # ds = ds_fn(p, image_set=image_set, transforms=transform)
-        ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
+        ds = ds_fn(p, image_set=image_set, transforms=transform)
+        # ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
     elif image_set in ['train', 'global']:
         ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
 
