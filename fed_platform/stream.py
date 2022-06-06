@@ -4,6 +4,7 @@ import requests
 from queue import PriorityQueue
 import time
 from fed_platform.cluster import Cluster, SegmentationCluster
+from collections import deque
 
 TIMEOUT = 3000
 '''
@@ -67,14 +68,17 @@ class FedStream(BaseStream):
     def __init__(self, *args, **kwargs):
         super(FedStream, self).__init__(*args, **kwargs)
         self.reader: FedReader
+
         if self.check_status(self.reader):
-            print('super init', self.reader)
+            pass
 
     def scheduler(self, pack=None):
+        pack.tb_writer = self.writer
+        self.reader.packs.append(pack)
 
-        self._schedule.append(self.reader.run(pack))
-
-        print(f'reserved : {len(self._schedule)} ', end=' ')
+        self._schedule.append(self.reader.run())
+        print(f"\t{'|'}", end=' ')
+        print(f'Reserved : {len(self._schedule)} ', end=' ')
 
     @staticmethod
     def check_status(reader):
@@ -132,17 +136,17 @@ class FedReader(BaseReader):
         super(FedReader).__init__()
         self.map_model = model_map_locate   # func before allocate
         self.cluster : Cluster = cluster
+        self.packs = deque()
 
     def __repr__(self):
         return f"{self.__class__} :: BASE Cluster: {self.cluster} BASE NET: {self.map_model}"
 
-    async def run(self, pack):
+    async def run(self):
         '''
         :param loader:
-        :return: fed model parmas
+        :return: fed model params
         '''
-
-        async with self.cluster(self.map_model, pack) as response:
+        async with self.cluster(self.map_model, self.packs.popleft()) as response:
             result = response
             return result
 

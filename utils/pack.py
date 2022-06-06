@@ -18,8 +18,9 @@ def get_dataset(dir_path, name, image_set, transform, client='client_all'):
     p, ds_fn, num_classes = paths[name]
 
     if image_set == 'val':
-        ds = ds_fn(p, image_set=image_set, transforms=transform)
-    elif image_set == 'train':
+        # ds = ds_fn(p, image_set=image_set, transforms=transform)
+        ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
+    elif image_set in ['train', 'global']:
         ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
 
     return ds, num_classes
@@ -112,6 +113,7 @@ class LoaderPack:
         self.test_loader = test_loader
         self.optimizer = optim
         self.criterion = crit
+        self.tb_writer = None
 
         if global_gpu:
             self.device = self.args.device
@@ -127,7 +129,12 @@ class LoaderPack:
             init_distributed_mode(self.args)
         # init_force_distributed_mode(self.args)
 
-        dataset, num_classes = get_dataset(self.data_path, self.args.dataset, "train", get_transform(train=True),
+        image_set = 'train'
+
+        if self.client == 'global':
+            image_set = 'global'
+
+        dataset, num_classes = get_dataset(self.data_path, self.args.dataset, image_set, get_transform(train=True),
                                            client=self.client)
 
         dataset_test, _ = get_dataset(self.data_path, self.args.dataset, "val", get_transform(train=False))
@@ -183,16 +190,14 @@ class LoaderPack:
 
     @property
     def load_local_client_path(self):
-        return os.path.join(self.args.resume, f"{self.client}_model_{self.start_epoch}.pth" )
+
+        return os.path.join(self.args.resume, f"{self.client}_model_{self.start_epoch-1}.pth" )
 
     @property
     def update_global_path(self):
         if self.args.update_status:
-            print(f'Update status of Global model | stored status:{self.args.update_status}|')
+            # print(f'Update status of Global model | stored status:{self.args.update_status}|')
             return os.path.join(self.args.save_root, self.args.global_model_path)
-
-        else:
-            print(f'Check update status of Global model | stored status:{self.args.update_status}|')
 
 class GeneratePack(LoaderPack):
 
