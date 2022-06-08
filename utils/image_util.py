@@ -8,6 +8,18 @@ import errno
 import os
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -115,6 +127,47 @@ class ConfusionMatrix(object):
                 iu.mean().item() * 100)
 
 
+
+class ConfusionMatrixAcc(ConfusionMatrix):
+
+    def __init__(self, *args, **kwargs):
+        super(ConfusionMatrixAcc, self).__init__(*args, **kwargs)
+        self.acc1 = 0
+        self.acc5 = 0
+        self.class_info = ('plane', 'car', 'bird', 'cat',
+           'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+    def accuracy(self, output, target, topk=(1,)):
+        """Computes the accuracy over the k top predictions for the specified values of k"""
+        with torch.no_grad():
+            maxk = max(topk)
+            batch_size = target.size(0)
+
+            _, pred = output.topk(maxk, 1, True, True)
+            pred = pred.t()
+            correct = pred.eq(target[None])
+
+            res = []
+            for k in topk:
+                correct_k = correct[:k].flatten().sum(dtype=torch.float32)
+                res.append(correct_k * (100.0 / batch_size))
+            return res
+
+    def compute(self):
+        h = self.mat.float()
+        acc_global = torch.diag(h).sum() / h.sum()
+        acc = torch.diag(h) / h.sum(1)
+        acc_class = list(zip(self.class_info, acc.tolist()))
+        top_5 = sorted(acc_class, key=lambda x: -x[1])[:5]
+
+        return acc_global, acc, top_5, acc_class
+
+    def __str__(self):
+        acc_global, acc, top_5, acc_class = self.compute()
+        return (f"Global Correct: {acc_global}\n acc_per_class{acc_class}\n"
+                f"top_5 acc class{top_5}" )
+
+
 class MetricLogger(object):
     def __init__(self, delimiter="\t"):
         self.meters = defaultdict(SmoothedValue)
@@ -204,6 +257,10 @@ class MetricLogger(object):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {}'.format(header, total_time_str))
         self.total_time = round(total_time, 1)
+
+
+
+
 
 
 def cat_list(images, fill_value=0):

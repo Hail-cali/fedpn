@@ -3,7 +3,8 @@ import asyncio
 import requests
 from queue import PriorityQueue
 import time
-from fed_platform.cluster import Cluster, SegmentationCluster
+from fed_platform.cluster import Cluster, SegmentationCluster, ClassificationCluster
+
 from collections import deque
 
 TIMEOUT = 3000

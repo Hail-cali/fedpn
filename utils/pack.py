@@ -1,31 +1,44 @@
 import os
 import torchvision
+
+import utils.load
 from utils.coco_utils import get_coco, get_clinet_coco
 import utils.presets as presets
 import torch
 from utils import image_util
 
 
-
 def get_dataset(dir_path, name, image_set, transform, client='client_all'):
     def sbd(*args, **kwargs):
         return torchvision.datasets.SBDataset(*args, mode='segmentation', **kwargs)
+
+    def cif(*args, **kwargs):
+        return utils.load.CIFAR10Dataset(*args, **kwargs)
+
     paths = {
         "voc": (dir_path, torchvision.datasets.VOCSegmentation, 21),
         "voc_aug": (dir_path, sbd, 21),
-        "coco": (dir_path, get_coco, 21)
+        "coco": (dir_path, get_coco, 21),
+        "cifar": (dir_path, cif, 10),
     }
     p, ds_fn, num_classes = paths[name]
 
-    if name in['voc', 'voc_aug']:
+    if name in ['voc', 'voc_aug']:
         ds = ds_fn(p, image_set='train_noval', transforms=transform)
         return ds, num_classes
 
-    if image_set == 'val':
-        ds = ds_fn(p, image_set=image_set, transforms=transform)
-        # ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
-    elif image_set in ['train', 'global']:
-        ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
+    elif name == 'coco':
+        if image_set == 'val':
+            ds = ds_fn(p, image_set=image_set, transforms=transform)
+            # ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
+        elif image_set in ['train', 'global']:
+            ds = get_clinet_coco(p, image_set=image_set, transforms=transform, cat_type=client)
+
+    elif name == 'cifar':
+        ds = ds_fn(p, image_set=image_set, transform=transform, cat_type=client)
+
+    else:
+        ds = ds_fn(p, image_set=image_set, transforms=transform, cat_type=client)
 
     return ds, num_classes
 
@@ -150,15 +163,20 @@ class LoaderPack:
             train_sampler = torch.utils.data.RandomSampler(dataset)
             test_sampler = torch.utils.data.SequentialSampler(dataset_test)
 
+
+        collate_fn_method = None
+        if self.args.tasks =='seg':
+            collate_fn_method = image_util.collate_fn
+
         self.train_loader = torch.utils.data.DataLoader(
             dataset, batch_size=config.batch_size,
             sampler=train_sampler, num_workers=self.args.workers,
-            collate_fn=image_util.collate_fn, drop_last=True)
+            collate_fn=collate_fn_method, drop_last=True)
 
         self.val_loader = torch.utils.data.DataLoader(
             dataset_test, batch_size=1,
             sampler=test_sampler, num_workers=self.args.workers,
-            collate_fn=image_util.collate_fn)
+            collate_fn=collate_fn_method)
 
     def set_local_gpu(self, status):
         import torch
@@ -194,7 +212,6 @@ class LoaderPack:
 
     @property
     def load_local_client_path(self):
-
         return os.path.join(self.args.resume, f"{self.client}_model_{self.start_epoch-1}.pth" )
 
     @property
@@ -203,8 +220,7 @@ class LoaderPack:
             # print(f'Update status of Global model | stored status:{self.args.update_status}|')
             return os.path.join(self.args.save_root, self.args.global_model_path)
 
-class GeneratePack(LoaderPack):
+    def update_validate_path(self):
+        return os.path.join(self.args.save_root, self.args.global_model_path)
 
-    def __init__(self, *args, **kwargs):
-        super(GeneratePack, self).__init__(*args, **kwargs)
 

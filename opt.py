@@ -13,20 +13,21 @@ def parse_opt():
     parser = argparse.ArgumentParser(prog='setting API')
 
     parser.add_argument('--readme', default='', type=str)
+    parser.add_argument('--tasks', default='seg', type=str, help='seg | cif')
 
     # base setting (model, basenet, mode, pretrained)
     parser.add_argument('--mode', default='train', type=str, help='train | inference | test ')
     parser.add_argument('--single_mode', default=0, type=bool, help='when training on single site, use this opt in sh')
 
     parser.add_argument('--basenet', default='mobilenet', help='pretraiend base model')
-    parser.add_argument('--model_name', default='fedpn', help='mpn | fpn')
+    parser.add_argument('--model_name', default='FedSMpn', help='FedMpn | FedSMpn')
     parser.add_argument('--pretrained', default=False, type=bool)
 
 
     # gpu & multi processing
     parser.add_argument('--distributed', default=False, type=bool)
     parser.add_argument('--workers', default=3, type=int)
-    parser.add_argument('--gpu', default=0,  help='use gpu num')
+    parser.add_argument('--gpu', default=1,  help='use gpu num')
     parser.add_argument('--use_cuda', action='store_true', help='If true, use GPU.')
     parser.add_argument('--rank', default=3)
     parser.add_argument('--world-size', default=2, type=int,
@@ -69,16 +70,16 @@ def parse_opt():
 
     # log
     parser.add_argument('--tensorboard', default=True)
-    parser.add_argument('--log_interval', default=100, type=int, help='Log interval for showing training loss')
-    parser.add_argument('--max_log', default=20, type=int)
+    parser.add_argument('--log_interval', default=5, type=int, help='Log interval for showing training loss')
+    parser.add_argument('--max_log', default=5, type=int)
 
     # server Initialized
     parser.add_argument('--initial_cls', default='g_net_classifier.pth', type=str)
     parser.add_argument('--cls_path', default='', type=str)
 
     # client_setting
-    parser.add_argument('--client_type', default='client_all', type=str,
-                        help = 'client_obj | client_animal | client_vehicle | client_all') # not used
+    parser.add_argument('--client_type', default='client_without_person', type=str,
+                        help = 'client_without_person | client_without_car | client_without_dog | ') # not used
 
     parser.add_argument('--num_clients', default=3, type=int)
     parser.add_argument('--update_status', default=False, help='is needed to update params from cluster')

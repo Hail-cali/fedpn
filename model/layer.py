@@ -7,6 +7,27 @@ import math
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
+
+class FedPnHead(nn.Sequential):
+
+    def __init__(self, in_channels, channels):
+        inter_channels = in_channels // 4
+
+        lastconv_output_channels = 6 * in_channels
+
+        layers = [
+            nn.Linear(in_channels, inter_channels),
+            nn.Hardswish(inplace=True),
+            nn.Dropout(p=0.2, inplace=True),
+            nn.Linear(inter_channels, channels),
+        ]
+
+        super(FedPnHead, self).__init__(*layers)
+
+
+
+
+
 def conv3x3(in_planes, out_planes, stride=1, padding=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=padding, bias=False)
 

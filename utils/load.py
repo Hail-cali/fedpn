@@ -1,49 +1,115 @@
-import torch.utils.data as data
 import json
 import cv2
 import numpy as np
+import os
+import pickle
 import torch
-from torchvision.transforms import functional as F
-import sys
+from typing import Optional, Callable, AnyStr, Any
+from torchvision.datasets import CIFAR10
+import torchvision.transforms as TF
 
 
-def load_state_dict_from_local_path(path, model_dir, map_location):
+class CIFAR10Dataset(CIFAR10):
+    base_folder = ''
 
-    return
+    def __init__(
+            self,
+            root: str,
+            image_set: str = 'train',
 
+            transform: Optional[Callable] = None,
+            target_transform: Optional[Callable] = None,
+            download: bool = False,
+            cat_type: Optional[AnyStr] = None,
+    ) -> None:
 
-def unpickle(file, batch_num):
-    import pickle
-    import os
-    batch_file = 'data_batch_' + str(batch_num)
-    file_path =  os.path.join(file, batch_file)
-    with open(file_path, 'rb') as fo:
-        dict = pickle.load(fo, encoding='bytes')
+        transform = TF.Compose(
+            [TF.ToTensor(),
+             TF.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+             ])
 
-    return dict
+        super(CIFAR10Dataset, self).__init__(root, transform=transform,
+                                      target_transform=target_transform)
 
-
-class ImageDataset(data.Dataset):
-
-    def __init__(self, data, test_mode=False):
-        super(ImageDataset, self).__init__()
-        if not test_mode:
-            self.X, self.y = self.make_dataset(data)
+        if image_set in ['train', 'global']:
+            self.train = True
         else:
-            self.X, self.y = self.make_dataset(data)
-            self.X, self.y = self.X[:400], self.y[:400]
-        # self.X_len = self.X.shape[0]
+            self.train = False
+        # self.train = train  # training set or test set
 
+        if download:
+            self.download()
 
-    def make_dataset(self, dict):
-        return dict[b'data'].reshape(len(dict[b'data']), 3, 32, 32).astype('float32'), np.array(dict[b'labels'])
-        # return dict[b'data'].reshape(len(dict[b'data']), 3, 32, 32).transpose(0, 2, 3, 1), np.array(dict[b'labels'])
+        if not self._check_integrity():
+            raise RuntimeError('Dataset not found or corrupted.' +
+                               ' You can use download=True to download it')
 
-    def __getitem__(self, index):
-        return self.X[index], self.y[index]
+        if self.train:
+            downloaded_list = self.train_list
+        else:
+            downloaded_list = self.test_list
 
-    def __len__(self):
-        return len(self.X)
+        self.data: Any = []
+        self.targets = []
+
+        # now load the picked numpy arrays
+
+        cat_list, batch_num = ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], '1')
+        image_dir = os.path.join(self.root, self.base_folder)
+
+        if cat_type:
+
+            mapper = {'client_vehicle': ([0,1,8,9],'2'),
+                      'client_animal': ([2,3,4,5,6,7],'3'),
+                      'client_ground': ([1,3,4,5,6,9],'4'),
+                      'client_without_dog_cat_bird':([0,1,4,6,7,8,9],'5'),
+                      'client_not_ground': ([0,2,8],'5'),
+
+                        # all class for test, deploy
+                      'client_all': ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], '4'),
+                      'global': ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], '1'),
+                      'server': ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], '3'),
+
+                        # except one class
+                      'client_without_airplane': ([1, 2, 3, 4, 5, 6, 7, 8, 9], '2'),
+                      'client_without_cat': ([0, 1, 2, 4, 5, 6, 7, 8, 9], '3'),
+                      'client_without_dog': ([0, 1, 2, 3, 4, 6, 7, 8, 9], '4'),
+
+                      'train_pretrained': ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], '5'),
+
+                      }
+            cat_list, batch_num = mapper[cat_type]
+
+        if image_set == 'val':
+            file_path = os.path.join(image_dir, 'test_batch')
+        else:
+            file_path = os.path.join(image_dir, 'data_batch_' + batch_num)
+
+        with open(file_path, 'rb') as f:
+            entry = pickle.load(f, encoding='latin1')
+
+            for image, target in zip(entry['data'], entry['labels']):
+                if self.train and target in cat_list :
+                    self.targets.append(target)
+                    self.data.append(image)
+
+                elif not self.train:
+                    self.targets.append(target)
+                    self.data.append(image)
+
+        self.data = np.vstack(self.data).reshape(-1, 3, 32, 32)
+        self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
+        # self.targets = np.hstack(self.targets)
+        self.targets = torch.LongTensor(self.targets)
+        self._load_meta()
+
+    def _load_meta(self) -> None:
+        path = os.path.join(self.root, self.meta["filename"])
+
+        with open(path, "rb") as infile:
+            data = pickle.load(infile, encoding="latin1")
+            self.classes = data[self.meta["key"]]
+        self.class_to_idx = {_class: i for i, _class in enumerate(self.classes)}
 
 
 class Config:
@@ -67,7 +133,6 @@ class Config:
         return self.__dict__
 
 
-
 class LoadImage(object):
 
     def __init__(self, space='BGR'):
@@ -77,125 +142,3 @@ class LoadImage(object):
         return cv2.imread(path_img)
 
 
-
-class Detection(data.Dataset):
-    """
-
-    """
-
-    def __init__(self, args, train=True, image_sets=['train2017'], transform=None, anno_transform=None,
-                 full_test=False):
-
-        self.dataset = args.dataset
-        self.root = args.root + '/' + args.data_path + '/'
-        self.data_type = args.data_path.split('/')[-1]
-
-        self.image_sets = image_sets
-        self.transform = transform
-        self.anno_transform = anno_transform
-        self.ids = list()
-        self.image_loader = LoadImage()
-        self.classes, self.ids, self.print_str, self.idlist = self._map(image_sets)
-
-
-    def _map(self, subsets):
-
-        with open(self.root + 'annots.json', 'r') as f:
-            db = json.load(f)
-
-        img_list = []
-        names = []
-        cls_list = db['classes']
-        annots = db['annotations']
-        idlist = []
-        if 'ids' in db.keys():
-            idlist = db['ids']
-        ni = 0
-        nb = 0.0
-        print_str = ''
-        for img_id in annots.keys():
-            # pdb.set_trace()
-            if annots[img_id]['set'] in subsets:
-                names.append(img_id)
-                boxes = []
-                labels = []
-                for anno in annots[img_id]['annos']:
-                    nb += 1
-                    boxes.append(anno['bbox'])
-                    labels.append(anno['label'])
-                # print(labels)
-                img_list.append([annots[img_id]['set'], img_id, np.asarray(boxes).astype(np.float32),
-                                 np.asarray(labels).astype(np.int64)])
-                ni += 1
-
-        print_str = '\n\n*Num of images {:d} num of boxes {:d} avergae {:01f}\n\n'.format(ni, int(nb), nb / ni)
-
-        return cls_list, img_list, print_str, idlist
-
-    def __len__(self):
-        return len(self.ids)
-
-    def __getitem__(self, index):
-        annot_info = self.ids[index]
-        subset_str = annot_info[0]
-        img_id = annot_info[1]
-        boxes = annot_info[2]
-        labels = annot_info[3]
-
-        img_name = '{:s}{:s}.jpg'.format(self.root, img_id)
-        print(img_name, labels)
-
-        # t0 = time.perf_counter()
-        img = self.image_loader(img_name)
-        height, width, _ = img.shape
-        wh = [width, height]
-        # print('t1', time.perf_counter()-t0)
-        # t0 = time.perf_counter()
-
-        imgs = []
-        imgs.append(img)
-        imgs = np.asarray(imgs)
-        # print(img_name, imgs.shape)
-        if self.transform:
-            imgs, boxes_, labels_ = self.transform(imgs, boxes, labels, 1)
-        else:
-            imgs, boxes_, labels_ = imgs, boxes, labels
-        # print('t2', time.perf_counter()-t0)
-        target = np.hstack((boxes_, np.expand_dims(labels_, axis=1)))
-        # imgs = imgs[:, :, :, (2, 1, 0)]
-        imgs = imgs[0]
-        # images = torch.from_numpy(imgs).permute(2, 0, 1)
-        # print(imgs.size(), boxes_, labels_)
-        # prior_labels, prior_gt_locations = torch.rand(1,2), torch.rand(2)
-
-        # if self.anno_transform:
-        #     prior_labels, prior_gt_locations = self.anno_transform(boxes_, labels_, len(labels_))
-
-        return imgs, target, index, wh
-
-
-class BaseTransform:
-    def __init__(self, size, means, stds):
-        self.size = size
-        self.means = np.array(means, dtype=np.float32)
-        self.stds = np.array(stds, dtype=np.float32)
-
-    def __call__(self, image, boxes=None, labels=None, seq_len=1):
-        return base_transform_nimgs(image, self.size, self.means, self.stds, seq_len=seq_len), boxes, labels
-
-
-def base_transform_nimgs(images, size, mean, stds, seq_len=1):
-    res_imgs = []
-    # print(images.shape)
-    for i in range(seq_len):
-        # img = Image.fromarray(images[i,:, :, :])
-        # img = img.resize((size, size), Image.BILINEAR)
-        img = cv2.resize(images[i, :, :, :], (size, size)).astype(np.float32)
-        #img = images[i, :, :, :].astype(np.float32)
-        # img  = np.asarray(img)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) / 255.0
-
-        res_imgs += [torch.from_numpy(img).permute(2, 0, 1)]
-    # pdb.set_trace()
-    # res_imgs = np.asarray(res_imgs)
-    return [F.normalize(img_tensor, mean, stds) for img_tensor in res_imgs]
