@@ -1,12 +1,14 @@
 {
   "ar" : 1,
 
-  "num_classes": 10,
+  "num_classes": 2,
   "bias_heads": 0,
 
   "batch_size": 128,
 
+  "eps": 1e-1,
+
   "lr": 0.1,
-  "momentum":0.9,
-  "wd":6e-5
+  "momentum":0.4,
+  "wd":1e-4
 }

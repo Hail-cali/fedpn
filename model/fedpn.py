@@ -9,6 +9,49 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class FedPND(nn.Module):
+    __constants__ = ['aux_classifier', 'personal_classifier']
+
+    def __init__(self, backbone, p_net_bone, classifier, aux_classifier=None, personal_classifier=None):
+        super(FedPND, self).__init__()
+        self.backbone = backbone
+        self.p_net_bone = p_net_bone
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.classifier = classifier
+        self.aux_classifier = aux_classifier
+        self.personal_classifier = personal_classifier
+
+    def forward(self, x):
+        input_shape = x.shape[-2:]
+        # contract: features is a dict of tensors
+        features = self.backbone(x)
+        features_personal = self.p_net_bone(x)
+
+        result = OrderedDict()
+
+        x = features["out"]
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        result["out"] = x
+
+        x = features_personal["p_net"]
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.personal_classifier(x)
+        result["p_net"] = x
+
+        if self.aux_classifier is not None:
+            x = features["aux"]
+            x = self.avgpool(x)
+            x = torch.flatten(x, 1)
+            x = self.aux_classifier(x)
+            result["aux"] = x
+
+        return result
+
+
+
 class FedPNCif(nn.Module):
     __constants__ = ['aux_classifier', 'global_classifier']
 

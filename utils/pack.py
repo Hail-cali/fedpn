@@ -1,11 +1,65 @@
 import os
 import torchvision
-
+from typing import Iterator, Optional, Sequence, List, TypeVar, Generic, Sized
 import utils.load
 from utils.coco_utils import get_coco, get_clinet_coco
 import utils.presets as presets
 import torch
 from utils import image_util
+import random
+from torch.utils.data import RandomSampler
+random.seed(42)
+
+class LimitSampler(RandomSampler):
+    data_source: Sized
+    replacement: bool
+
+    def __init__(self, data_source: Sized, replacement: bool = False,
+                 num_samples: Optional[int] = None, generator=None) -> None:
+        self.data_source = data_source
+        self.replacement = replacement
+        self._num_samples = num_samples
+        self.generator = generator
+        self._seed = 42
+
+        if not isinstance(self.replacement, bool):
+            raise TypeError("replacement should be a boolean value, but got "
+                            "replacement={}".format(self.replacement))
+
+
+        if not isinstance(self.num_samples, int) or self.num_samples <= 0:
+            raise ValueError("num_samples should be a positive integer "
+                             "value, but got num_samples={}".format(self.num_samples))
+
+    @property
+    def num_samples(self) -> int:
+        # dataset size might change at runtime
+        if self._num_samples is None:
+            return len(self.data_source)
+        return self._num_samples
+
+    def __iter__(self) -> Iterator[int]:
+        n = len(self.data_source)
+        if self.generator is None:
+            generator = torch.Generator()
+            generator.manual_seed(self._seed)
+            # generator.manual_seed(int(torch.empty((), dtype=torch.int64).random_().item()))
+        else:
+            generator = self.generator
+        if self.replacement:
+            for _ in range(self.num_samples // 32):
+                yield from torch.randint(high=n, size=(32,), dtype=torch.int64, generator=generator).tolist()
+            yield from torch.randint(high=n, size=(self.num_samples % 32,), dtype=torch.int64,
+                                     generator=generator).tolist()
+        else:
+            for _ in range(self.num_samples // n):
+                yield from torch.randperm(n, generator=generator).tolist()
+            yield from torch.randperm(n, generator=generator).tolist()[:self.num_samples % n]
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+
 
 
 def get_dataset(dir_path, name, image_set, transform, client='client_all'):
@@ -13,7 +67,9 @@ def get_dataset(dir_path, name, image_set, transform, client='client_all'):
         return torchvision.datasets.SBDataset(*args, mode='segmentation', **kwargs)
 
     def cif(*args, **kwargs):
-        return utils.load.CIFAR10Dataset(*args, **kwargs)
+        # return utils.load.CIFAR10Dataset(*args, **kwargs)
+        return utils.load.RANDOMCIFAR10Dataset(*args, **kwargs)
+        # return utils.load.MappedCIFAR10Dataset(*args, **kwargs)
 
     paths = {
         "voc": (dir_path, torchvision.datasets.VOCSegmentation, 21),
@@ -124,7 +180,7 @@ class LoaderPack:
         self.cfg_path = os.path.join(self.args.root, self.args.cfg_path[2:])
         self.data_path = os.path.join(self.args.root, self.args.data_path)
         self.dynamic = dynamic
-
+        self.update_global_status = False if self.args.start_epoch == 0 else True
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
@@ -154,13 +210,16 @@ class LoaderPack:
         dataset, num_classes = get_dataset(self.data_path, self.args.dataset, image_set, get_transform(train=True),
                                            client=self.client)
 
-        dataset_test, _ = get_dataset(self.data_path, self.args.dataset, "val", get_transform(train=False))
+        dataset_test, _ = get_dataset(self.data_path, self.args.dataset, "val", get_transform(train=False), client=self.client)
 
         if self.args.distributed:
             train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
             test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test)
         else:
-            train_sampler = torch.utils.data.RandomSampler(dataset)
+            if self.client in ['server', 'global']:
+                train_sampler = LimitSampler(dataset, num_samples=640)
+            else:
+                train_sampler = torch.utils.data.RandomSampler(dataset)
             test_sampler = torch.utils.data.SequentialSampler(dataset_test)
 
 
@@ -168,10 +227,13 @@ class LoaderPack:
         if self.args.tasks =='seg':
             collate_fn_method = image_util.collate_fn
 
+
+
         self.train_loader = torch.utils.data.DataLoader(
             dataset, batch_size=config.batch_size,
             sampler=train_sampler, num_workers=self.args.workers,
             collate_fn=collate_fn_method, drop_last=True)
+
 
         self.val_loader = torch.utils.data.DataLoader(
             dataset_test, batch_size=1,
@@ -183,8 +245,7 @@ class LoaderPack:
         # local_gpu = {'client_animal':0, 'client_vehicle':1, 'client_almost':2,
         #           'client_obj':3, 'client_all':0}
 
-        local_gpu = {'client_animal': 1, 'client_vehicle': 3, 'client_almost': 3,
-                     'client_obj': 0, 'client_all': 0}
+        local_gpu = {}
 
         self.args.use_cuda = f'cuda:{local_gpu[self.client]}' if torch.cuda.is_available() else 'cpu'
         return torch.device(self.args.use_cuda)
@@ -204,23 +265,13 @@ class LoaderPack:
             return self.val_loader
 
     @property
-    def local_client_path(self):
-        if not self.args.update_status:
-            return os.path.join(self.args.resume, f"{self.client}_model_{self.start_epoch}.pth" )
-        else:
-            return os.path.join(self.args.save_root, self.args.global_model_path)
+    def load_fed_params(self):
+        return os.path.join(self.args.save_root, self.args.global_model_path)
 
     @property
-    def load_local_client_path(self):
+    def load_local_params(self):
         return os.path.join(self.args.resume, f"{self.client}_model_{self.start_epoch-1}.pth" )
 
-    @property
-    def update_global_path(self):
-        if self.args.update_status:
-            # print(f'Update status of Global model | stored status:{self.args.update_status}|')
-            return os.path.join(self.args.save_root, self.args.global_model_path)
 
-    def update_validate_path(self):
-        return os.path.join(self.args.save_root, self.args.global_model_path)
 
 

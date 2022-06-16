@@ -5,18 +5,19 @@ import copy
 import time
 import os
 
-from trainer.loss import SegmentTrainer, SegmentValidator, \
-        ClassificationTrainer, ClassificationValidator, \
-        seg_criterion, cif_criterion
-
+from trainer.loss import seg_criterion, cif_criterion, pmn_criterion
 from utils.pack import LoaderPack
 from utils.load import Config
 from utils import image_util
+
 import torch
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict
+
 from typing import List
+
 import sys
 import numpy as np
+
 from tensorboardX import SummaryWriter
 
 TIMEOUT = 3000
@@ -33,15 +34,20 @@ def fed_aggregate_avg(agg, results, global_layers):
     # result['data_len']
     # result['data_info']
 
-    size = 1
+    size = 0
     aux_layer = [str(k) for k in global_layers]
+
     for client in results:
 
         for k, v in client['params'].items():
-            if k.split('.')[1] in aux_layer and k.split('.')[0] == 'backbone':
-                agg[k] += (v * client['data_len'])
-                # agg[k] += (v * client['data_len'])
-        print(f"debug: client: {client['data_info']['client_name']} | data len: {client['data_len']}")
+            if  k.split('.')[0] == 'backbone':
+                try:
+                    agg[k] += (v * client['data_len'])
+                except:
+                    agg[k] = (v * client['data_len'])
+
+
+        print(f"debug: client: {client['info']['client_name']} | data len: {client['data_len']}")
         size += client['data_len']
 
     print('debug: ', size, len(results))
@@ -61,8 +67,41 @@ def fed_aggregate_avg(agg, results, global_layers):
             agg[k] = v / size
 
 
-def fed_aggregate_(result):
+def fed_aggregate_weighted_avg(agg, results, global_layers):
 
+    weighted_idx = sorted([(num, client['info']['acc1']) for num, client in enumerate(results)], key=lambda x: -x[1])
+
+    # weighted_sum_raw = [round(ele, 1) for ele in np.arange(0.8, 0, -0.2, dtype=np.float64).tolist()]
+    weighted_sum = [0.3, 0.2, 0.2, 0.1, 0.1, 0.05,  0.05, 0, 0, 0]
+    print(weighted_idx,'\n', weighted_sum)
+    divide = sum(weighted_sum)
+
+    aux_layer = [str(k) for k in global_layers]
+
+    for rank_idx, (client_num, _)  in enumerate(weighted_idx):
+        client = results[client_num]
+        for k, v in client['params'].items():
+            if k.split('.')[1] in aux_layer and k.split('.')[0] == 'backbone':
+                try :
+                    agg[k] += (v * weighted_sum[rank_idx])
+                except:
+                    agg[k] = (v * weighted_sum[rank_idx])
+
+        print(f"debug: client: {client['info']['client_name']} | data len: {client['info']['acc1']}")
+
+
+    for k, v in agg.items():
+        if torch.is_tensor(v):
+            agg[k] = torch.div(v, divide)
+
+        elif isinstance(v, np.ndarray):
+            agg[k] = np.divide(v, divide)
+
+        elif isinstance(v, list):
+            agg[k] = [val / divide for val in agg[k]]
+
+        elif isinstance(v, int):
+            agg[k] = v / divide
     return
 
 
@@ -71,26 +110,18 @@ class Cluster:
     TEST Cluster
     dynamic allocation model, dataset on Cluster
 
-    :: update model state_dict on Cluster's work module : Trainer.loss.BaseTrainer.update_state_dict_full
     '''
 
     def __init__(self, model_map_location=None, pack=None):
-        self.pack: LoaderPack = pack   # pre set
-
-        if self.pack.args.mode == 'train':
-            self.module = ClassificationTrainer()
-        elif self.pack.args.mode == 'val':
-            self.module = ClassificationValidator()
-        else:
-            print(f'mode {self.pack.args.mode}::')
-            self.module = None
+        self.pack: LoaderPack = pack
+        self.module = None
         self.map_model = model_map_location
         self.model = None
 
     def _set_model(self, model_map_location, config):
         # Allocate model, update params
-        self.model = model_map_location(pretrained=self.pack.args.pretrained, num_classes=config.num_classes,  global_loss=self.pack.args.global_loss,
-                                        tasks=self.pack.args.tasks, )
+        self.model = model_map_location(pretrained=self.pack.args.pretrained, num_classes=config.num_classes,
+                                        global_loss=self.pack.args.global_loss)
         self.model.to(self.pack.device)
 
         if self.pack.args.distributed:
@@ -103,17 +134,25 @@ class Cluster:
             # self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.pack.args.gpu])
             model_without_ddp = self.model.module
 
+        if self.pack.client not in ['global'] and self.pack.args.freeze_cls:
+            self.freeze_cls()
+
         params_to_optimize = [
             {"params": [p for p in model_without_ddp.backbone.parameters() if p.requires_grad]},
             {"params": [p for p in model_without_ddp.classifier.parameters() if p.requires_grad]},
         ]
+
         if self.pack.args.aux_loss:
             params = [p for p in model_without_ddp.aux_classifier.parameters() if p.requires_grad]
             params_to_optimize.append({"params": params, "lr": config.lr * 10})
 
         if self.pack.args.global_loss:
-            params = [p for p in model_without_ddp.global_classifier.parameters() if p.requires_grad]
+            # params = [p for p in model_without_ddp.global_classifier.parameters() if p.requires_grad]
+            params_bone = [p for p in model_without_ddp.p_net_bone.parameters() if p.requires_grad]
+            params = [p for p in model_without_ddp.personal_classifier.parameters() if p.requires_grad]
             params_to_optimize.append({"params": params, "lr": config.lr * 10})
+            params_to_optimize.append({"params": params_bone, "lr": config.lr * 10})
+
 
         self.pack.optimizer = torch.optim.SGD(
             params_to_optimize,
@@ -127,16 +166,26 @@ class Cluster:
             self.pack.criterion = seg_criterion
 
         elif self.pack.args.tasks == 'cif':
-            self.pack.criterion = cif_criterion
+            if self.pack.args.model_name == 'FedSMpn':
+                self.pack.criterion = cif_criterion
+            elif self.pack.args.model_name == 'FedAMpn':
+                self.pack.criterion = pmn_criterion
+
+        # # ******************
+        if self.pack.client not in ['global', 'train_pretrained']:
+            self.update_model()
+
+            if self.pack.args.freeze_cls:
+                print(f': -- Freeze CLS [4, 5, 6 ] backbone')
+                self.freeze_cls()
+        # # ******************
+        # # ******************
+        model_parameters = filter(lambda p: p.requires_grad, self.model.parameters())
+        params_size = sum([np.prod(p.size()) for p in model_parameters])
+
+        print(f'params size : {params_size}')
 
 
-        # ******************
-        # if self.pack.client not in ['global', 'train_pretrained']:
-        #     self.update_state_dict_full()
-        #
-        #     if self.pack.args.freeze_cls:
-        #         print(f'-- Freeze CLS')
-        #         self.freeze_cls()
 
     def shared_train(self):
         config = Config(json_path=str(self.pack.cfg_path))
@@ -157,84 +206,54 @@ class Cluster:
             print(len(self.pack.train_loader.dataset))
             print(len(self.pack.val_loader.dataset))
 
-        abs_path = os.path.join('/home/hail09/FedPn/model/pretrained_pth', 'val_pretrained.pth')
-
         self._set_model(self.map_model, config)
 
-        if os.path.exists(abs_path) and self.pack.client == 'train_pretrained':
-            chk = torch.load(abs_path)['model']
-            base = self.model.state_dict()
-            base.update(chk)
-            self.model.load_state_dict(base, strict=False)
-            print(f':: Update Params from chk')
-
-        for round_ in range(self.pack.args.start_epoch, self.pack.args.epochs+1):
+        for round_ in range(self.pack.args.start_epoch, self.pack.args.epochs):
             self.module(self.model, self.pack)
             self.pack.start_epoch += 1
 
-        if self.pack.client == 'train_pretrained':
-            checkpoint = {
-                'model': self.model.state_dict(),
-                'optimizer': self.pack.optimizer.state_dict(),
-                'lr_scheduler': self.pack.lr_scheduler.state_dict(),
-                'epoch': self.pack.start_epoch,
-                'args': self.pack.args
-            }
-            image_util.save_on_master(
-                checkpoint,
-                abs_path)
-
-            print(f"saved on {abs_path}")
-
-    def update_state_dict_full(self):
+    def update_model(self):
         base_model = self.model.state_dict()
 
-        # Server Validation
-        if self.pack.client == 'server':
-            print(f':: Server Validation Params Updated from pretrained model')
-            checkpoint = torch.load(self.pack.update_validate_path, map_location='cpu')
-            base_model.update(checkpoint['model'])
-            print(f':: Update Federated Global model on validation {self.pack.update_validate_path}')
-            self.model.load_state_dict(base_model, strict=False)
-            return
 
-        # Update CheckPoint Params
-        if os.path.exists(self.pack.load_local_client_path) and self.pack.start_epoch != 0:
-            checkpoint = torch.load(self.pack.load_local_client_path, map_location='cpu')
-            base_model.update(checkpoint['model'])
 
+        # start phase?
+        if self.pack.start_epoch == 0:
+            if self.pack.args.initial_deploy:
+                print(f':: Initialized on Deployed  Initial params ')
+
+            print(f':: Initialized on Randomly')
+
+        else:
+            checkpoint = torch.load(self.pack.load_local_params, map_location='cpu')
+            base_model.update(checkpoint['model'])
             if not self.pack.args.test_only:
                 self.pack.optimizer.load_state_dict(checkpoint['optimizer'])
                 self.pack.lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
                 self.pack.start_epoch = checkpoint['epoch'] + 1
             print(f':: Updated state dict on CheckPoint({self.pack.start_epoch})')
-        else:
-            # retrive this
-            checkpoint = torch.load(self.pack.args.cls_path, map_location='cpu')
-            base_model.update(checkpoint['model'])
-            print(f':: Initialized on , Deployed by Initial Params {self.pack.args.cls_path}')
 
-        # update federated global model params
-        if self.pack.update_global_path:
-            checkpoint = torch.load(self.pack.update_global_path, map_location='cpu')
+        # test mode without Federated learning
+        if self.pack.args.diff_exp:
+            print(f'Without Federated learning Mode')
+            self.model.load_state_dict(base_model, strict=False)
+            return
+
+        #Update Federated parmas from global.pth
+        if self.pack.update_global_status:
+            checkpoint = torch.load(self.pack.load_fed_params, map_location='cpu')
             base_model.update(checkpoint['model'])
-            print(f':: Update Federated Global model on Client model {self.pack.update_global_path}')
-        else:
-            print(f':: Initialized on Client model ')
+            print(f':: Update Federated Global model on {self.pack.client} model {self.pack.load_fed_params}')
 
         self.model.load_state_dict(base_model, strict=False)
 
-
-
     def freeze_cls(self):
-        for name, child in self.model.named_children():
-
-            for param in child.parameters():
-                if name in ['classifier']:
-                    param.requires_grad = False
-
-                elif name == 'backbone':
-                    pass
+        freeze_layer = ['4','5','6']
+        for name,child in self.model.named_children():
+            if name == 'backbone':
+                for p, param in child.named_parameters():
+                    if p.split('.')[0] in freeze_layer:
+                        param.requires_grad = False
 
 
     async def __aenter__(self, *args):
@@ -256,6 +275,7 @@ class SegmentationCluster(Cluster):
 
     def __init__(self, *args, **kwargs):
         super(SegmentationCluster, self).__init__(*args, **kwargs)
+        from trainer.loss import SegmentTrainer, SegmentValidator
         if self.pack.args.mode == 'train':
             self.module = SegmentTrainer()
         else:
@@ -266,10 +286,22 @@ class ClassificationCluster(Cluster):
 
     def __init__(self, *args, **kwargs):
         super(ClassificationCluster, self).__init__(*args, **kwargs)
+        from trainer.loss import ClassificationTrainer, ClassificationValidator
         if self.pack.args.mode == 'train':
             self.module = ClassificationTrainer()
         else:
             self.module = ClassificationValidator()
+
+
+class PersonalCluster(Cluster):
+    def __init__(self, *args, **kwargs):
+        super(PersonalCluster, self).__init__(*args, **kwargs)
+        from trainer.loss import PersonalValidator, PersonalTrainer
+
+        if self.pack.args.mode == 'train':
+            self.module = PersonalTrainer()
+        else:
+            self.module = PersonalValidator()
 
 
 class LocalAPI:
@@ -283,25 +315,25 @@ class LocalAPI:
         print(self.args)
 
         self.mode = args.mode
-        if self.mode == 'val':
-            self.args.update_status = True
+
         self.net = base_net
         self.base_agg = None
 
         self.cluster: ClassificationCluster = base_cluster
+
         self.stream = base_steam
         self.reader = base_reader
 
         readme = args.readme
-        readme += f"_{args.model_name}_client({args.num_clients}).aux({args.aux_loss}).global.({args.global_loss})"
-        readme += f".freeze({args.freeze_cls}).deploy({args.deploy_cls})_{args.dataset}_save_{args.save_root.split('/')[-1]}"
+        readme += f"-{args.model_name}-client({args.num_clients})-dataset.{args.dataset}({args.save_root.split('/')[-1]})"
+        readme += f".aux({args.aux_loss}).global({args.global_loss}).freeze({args.freeze_cls}).deploy({args.initial_deploy})"
         if writer:
             self.writer = SummaryWriter(f'runs/{readme}')
         else:
             self.writer = None
 
         self.loop = asyncio.get_event_loop()
-        self.fed_state_dict_ls: List[int] = [4,11,12,13]
+        self.fed_state_dict_ls: List[int] = [10, 11, 12]
 
         if global_gpu:
             self.set_global_gpu()
@@ -311,21 +343,22 @@ class LocalAPI:
         print(f'Global GPU Set {self.global_gpu} allocated on ')
 
         self.clients = {}
-        if self.args.single_mode == 0:
-            if self.args.dataset == 'cifar':
-
-                self.client_map = {0: 'client_vehicle', 1: 'client_animal', 2: 'client_ground',
-                                   3: 'client_without_dog_cat_bird',4:'client_not_ground', 5: 'client_without_airplane'}
-
-            elif self.args.dataset == 'coco':
-                self.client_map = {0:'client_without_person',1:'client_without_car', 2:'client_without_dog',3:'client_all'}
-
-            print(self.client_map)
-
-        else:
-            self.client_map = {0:'client_all'}
-            self.args.num_clients = 1
-            print(f'Force single mode on({self.args.single_mode}) | num_clients forced to {self.args.num_clients} | client_all used')
+        self.client_map = dict((i, f'c{i + 1}') for i in range(100))
+        # if self.args.dataset == 'cifar':
+        #     self.client_map = dict((i, f'c{i+1}') for i in range(100))
+            # self.client_map = {0: 'c1', 1: 'c2', 2: 'c3', 3: 'c4', 4: 'c5', 5: 'c6', 6: 'c7', 7: 'c8', 8: 'c9', 9: 'c10',
+            #                    10: 'c11', 11: 'c12', 12: 'c13', 13: 'c14', 14: 'c15', 15: 'c16', 16: 'c17', 17: 'c18',
+            #                    18: 'c19', 19: 'c20', 20: 'c21', 21: 'c22', 22: 'c23', 23: 'c24', 24: 'c25', 25: 'c26',
+            #                    26: 'c27', 27: 'c28', 28: 'c29', 29: 'c30', 30: 'c31', 31: 'c32', 32: 'c33', 33: 'c34',
+            #                    34: 'c35', 35: 'c36', 36: 'c37', 37: 'c38', 38: 'c39', 39: 'c40', 40: 'c41', 41: 'c42',
+            #                    42: 'c43', 43: 'c44', 44: 'c45', 45: 'c46', 46: 'c47', 47: 'c48', 48: 'c49', 49: 'c50',
+            #                    50: 'c51', 51: 'c52', 52: 'c53', 53: 'c54', 54: 'c55', 55: 'c56', 56: 'c57', 57: 'c58',
+            #                    58: 'c59', 59: 'c60', 60: 'c61', 61: 'c62', 62: 'c63', 63: 'c64', 64: 'c65', 65: 'c66',
+            #                    66: 'c67', 67: 'c68', 68: 'c69', 69: 'c70', 70: 'c71', 71: 'c72', 72: 'c73', 73: 'c74',
+            #                    74: 'c75', 75: 'c76', 76: 'c77', 77: 'c78', 78: 'c79', 79: 'c80', 80: 'c81', 81: 'c82',
+            #                    82: 'c83', 83: 'c84', 84: 'c85', 85: 'c86', 86: 'c87', 87: 'c88', 88: 'c89', 89: 'c90',
+            #                    90: 'c91', 91: 'c92', 92: 'c93', 93: 'c94', 94: 'c95', 95: 'c96', 96: 'c97', 97: 'c98',
+            #                    98: 'c99', 99: 'c100'}
 
         image_util.make_dir(self.args.model_dir)
         image_util.make_dir(self.args.save_root)
@@ -364,41 +397,55 @@ class LocalAPI:
                 print(task.result())
         return result
 
-    def test(self):
-        from utils.pack import get_dataset, get_transform
-        args = copy.deepcopy(self.args)
-        args.mode = 'val'
-        args.pretrained = True
+    def test_phase(self):
 
+        args = copy.deepcopy(self.args)
+        args.start_epoch -= 1
         pack = LoaderPack(args, dynamic=True, client='server', global_gpu=self.global_gpu)
+        pack.update_global_status = True
         pack.cfg_path = os.path.join(self.args.root, f"experiments/{pack.args.dataset}.global.config.json")
         pack.tb_writer = self.writer
+
         cluster = self.cluster(self.net, pack)
         print(f"{'-' * 10}Server TEST Global model{'-' * 10} ")
-        cluster.shared_train()
+        result = cluster.shared_train()
+        global_model = OrderedDict()
+        for k, v in result['params'].items():
+            if k.split('.')[0] == 'backbone':
+                global_model[k] = v
+
+        model_path = os.path.join(self.args.save_root, self.args.global_model_path)
+        checkpoint = {
+            'model': global_model,
+        }
+
+        image_util.save_on_master(
+            checkpoint,
+            model_path)
+
         cluster = None
         pack = None
 
     def set_phase(self):
-        path = os.path.join(self.args.save_root, 'global_cls')
-        cls_path = os.path.join(path, self.args.initial_cls)
-        self.args.cls_path = cls_path
 
-        if os.path.exists(cls_path):
-            pass
+        # deploy initial_cls to all client, server
+        if self.args.initial_deploy:
+            path = os.path.join(self.args.save_root, 'global_cls')
+            initial_cls_path = os.path.join(path, self.args.initial_cls)
+            self.args.initial_cls_path = initial_cls_path
 
-        else:
-            print(f'Train Global Aux Classifier on Server')
-            pack = LoaderPack(self.args, dynamic=True,  client='global', global_gpu=self.global_gpu)
-            pack.tb_writer = self.writer
+            if os.path.exists(initial_cls_path):
+                pass
 
-            # pack.cfg_path = os.path.join(self.args.root, 'experiments/coco.global.config.json')
-            pack.cfg_path = os.path.join(self.args.root, f"experiments/{pack.args.dataset}.global.config.json")
-
-            worker = self.cluster(self.net, pack)
-            worker.shared_train()
-            worker = None
-            pack = None
+            else:
+                print(f'Train Global Aux Classifier on Server')
+                pack = LoaderPack(self.args, dynamic=True,  client='global', global_gpu=self.global_gpu)
+                pack.tb_writer = self.writer
+                pack.cfg_path = os.path.join(self.args.root, f"experiments/{pack.args.dataset}.global.config.json")
+                worker = self.cluster(self.net, pack)
+                worker.shared_train()
+                worker = None
+                pack = None
 
     def train_phase(self):
         self.clients = self._create_client_local()
@@ -417,12 +464,10 @@ class LocalAPI:
     def deploy_phase(self, data):
         self.args.start_epoch += 1
         self._aggregation(data, self.args.start_epoch)
-        self.args.update_status = True
         self.clients.clear()
 
     def execute(self):
 
-        total_start = time.time()
         print(f"{'+' * 30}")
         start = self.args.start_epoch
         end = self.args.epochs
@@ -433,30 +478,13 @@ class LocalAPI:
             print(f"{'::'} Federated Learning Round {round} Start ")
             result = self.train_phase()
             self.deploy_phase(result)
-            self.test()
+            self.test_phase()
 
-        total_end = time.time()
-        # print(f'total local fed run time {total_end-total_start:.5f}times')
         print(f"{'+' * 30}")
         self.loop.close()
 
         if self.writer:
             self.writer.close()
-
-    def _generate_base_agg(self, load='cpu'):
-        self.base_agg = None
-        base_agg = self.net(pretrained=self.args.pretrained)
-
-        if load == 'cpu':
-            pass
-
-        base_agg.to(self.args.device)
-        base_layers = [str(i) for i, b in enumerate(base_agg.backbone) if i in self.fed_state_dict_ls]
-
-        self.base_agg = OrderedDict(
-            dict((layer_k, weight) for layer_k, weight in base_agg.state_dict().items()
-                 if layer_k.split('.')[1] in base_layers and layer_k.split('.')[0] == 'backbone'))
-        print()
 
     def _create_client_local(self):
         clients = {}
@@ -476,14 +504,8 @@ class LocalAPI:
         return tasks
 
     def _aggregation(self, data, epoch):
-        '''
 
-        :param data: asyio module class
-        :param epoch:  cur epoch round
-
-        '''
-
-        self._generate_base_agg() # make self.base_agg
+        self.base_agg = OrderedDict()
         fed_aggregate_avg(self.base_agg, data, self.fed_state_dict_ls)
 
         model_path = os.path.join(self.args.save_root, self.args.global_model_path)
@@ -492,6 +514,7 @@ class LocalAPI:
             'epoch': epoch,
             'args': self.args
         }
+
         image_util.save_on_master(
             checkpoint,
             model_path)

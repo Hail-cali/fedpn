@@ -5,10 +5,11 @@ from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.models.segmentation.fcn import FCNHead
 from torchvision.models.segmentation.deeplabv3 import DeepLabHead, DeepLabV3
 import torch
-from model.fedpn import FedPN, FedPNCif
+from model.fedpn import FedPN, FedPNCif, FedPND
 from model.layer import FedPnHead
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
+import copy
 
 # # from ...utils import _log_api_usage_once
 
@@ -83,11 +84,51 @@ def _hail_cif_mobilenetv3(
 
     backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)
 
+
     aux_classifier = FedPnHead(aux_inplanes, num_classes) if aux else None
     global_classifier = FedPnHead(g_net_inplanes, num_classes) if g_net else None
     classifier = FedPnHead(out_inplanes, num_classes)
     return FedPNCif(backbone, classifier, aux_classifier, global_classifier)
 
+
+def _hail_pmn_mobilenetv3(
+        backbone: mobilenetv3.MobileNetV3,
+        p_bone: mobilenetv3.MobileNetV3,
+        num_classes: int,
+        aux: Optional[bool],
+        g_net: Optional[bool],
+):
+
+    aux = True
+    g_net = True
+    backbone = backbone.features
+    p_bone = p_bone.features
+
+    stage_indices = [0] + [i for i, b in enumerate(backbone) if getattr(b, "_is_cn", False)] + [len(backbone) - 1]
+    out_pos = stage_indices[-1]  # use C5 which has output_stride = 16
+    out_inplanes = backbone[out_pos].out_channels
+
+    aux_pos = stage_indices[-3]  # use C2 here which has output_stride = 8
+    aux_inplanes = backbone[aux_pos].out_channels
+    return_layers = {str(out_pos): "out"}
+
+    if aux:
+        return_layers[str(aux_pos)] = "aux"
+
+    p_net_pos = aux_pos
+    p_net_bone = p_bone[:p_net_pos+1]
+    p_net_inplanes = p_net_bone[p_net_pos].out_channels
+    p_net_return_layers = {str(p_net_pos): 'p_net'}
+
+    backbone = IntermediateLayerGetter(backbone, return_layers=return_layers)
+    p_net_bone = IntermediateLayerGetter(p_net_bone, return_layers=p_net_return_layers)
+
+
+    aux_classifier = FedPnHead(aux_inplanes, num_classes) if aux else None
+    personal_classifier = FedPnHead(p_net_inplanes, num_classes) if g_net else None
+    classifier = FedPnHead(out_inplanes, num_classes)
+
+    return FedPND(backbone, p_net_bone, classifier, aux_classifier, personal_classifier)
 
 
 def hail_mobilenet_v3_large(
@@ -96,8 +137,7 @@ def hail_mobilenet_v3_large(
         num_classes: int = 21,
         pretrained_backbone: bool = True,
         aux_loss: Optional[int] = True,
-        global_loss: Optional[int] = False,
-        tasks : Optional[str]  = 'seg'):
+        global_loss: Optional[int] = False):
 
     if pretrained:
         aux_loss = True
@@ -108,10 +148,9 @@ def hail_mobilenet_v3_large(
 
     backbone = mobilenetv3.mobilenet_v3_large(pretrained=pretrained_backbone, dilated=True)
 
-    if tasks == 'seg':
-        model = _hail_mobilenetv3(backbone, num_classes, aux_loss, global_loss)
-    elif tasks == 'cif':
-        model = _hail_cif_mobilenetv3(backbone, num_classes, aux_loss, global_loss)
+
+    model = _hail_mobilenetv3(backbone, num_classes, aux_loss, global_loss)
+
 
     if pretrained:
         arch = "deeplabv3_mobilenet_v3_large_coco"
@@ -126,12 +165,11 @@ def hail_mobilenet_v3_small(
         num_classes: int = 21,
         pretrained_backbone: bool = True,
         aux_loss: Optional[int] = True,
-        global_loss: Optional[int] = False,
-        tasks : Optional[str]  = 'seg'):
+        global_loss: Optional[int] = True):
 
     if pretrained:
         aux_loss = True
-        global_loss = False
+        global_loss = True
         pretrained_backbone = False
     else:
         pretrained_backbone = True
@@ -144,9 +182,40 @@ def hail_mobilenet_v3_small(
     if pretrained:
         path = '/home/hail09/FedPn/model/pretrained_pth/val_pretrained.pth'
         chk = torch.load(path, map_location='cpu')
-        model.load_state_dict(chk['model'])
+        model.load_state_dict(chk['model'],strict=False)
         print(f'Upload pretrained Server Model for Validate, Global Fed Layer will be changed')
     return model
+
+
+def hail_mobilenet_v3_pmn(pretrained: bool = False,
+        progress: bool = True,
+        num_classes: int = 10,
+        pretrained_backbone: bool = True,
+        aux_loss: Optional[int] = False,
+        global_loss: Optional[int] = True,
+        ):
+
+    if pretrained:
+        aux_loss = True
+        global_loss = True
+        pretrained_backbone = False
+
+    else:
+        pretrained_backbone = True
+
+    backbone = mobilenetv3.mobilenet_v3_small(pretrained=pretrained_backbone, dilated=True)
+    p_bone = mobilenetv3.mobilenet_v3_small(pretrained=pretrained_backbone, dilated=True)
+
+    model = _hail_pmn_mobilenetv3(backbone, p_bone,num_classes, aux_loss, global_loss)
+
+    # if pretrained:
+    #     path = '/home/hail09/FedPn/model/pretrained_pth/val_pretrained.pth'
+    #     chk = torch.load(path, map_location='cpu')
+    #     model.load_state_dict(chk['model'],strict=False)
+    #     print(f'Upload pretrained Server Model for Validate, Global Fed Layer will be changed')
+    return model
+
+
 
 
 def _load_weights(arch: str, model: nn.Module, model_url: Optional[str], progress: bool) -> None:

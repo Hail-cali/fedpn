@@ -1,37 +1,55 @@
-from utils.load import Config
+
 from opt import parse_opt
-from model.hailnet import hail_mobilenet_v3_large
-from typing import Optional, Dict
-from torch import nn
-from torchvision.models._utils import IntermediateLayerGetter
-from utils.pack import LoaderPack
+from fed_platform.stream import FedStream, FedReader
+from model.hailnet import hail_mobilenet_v3_large, hail_mobilenet_v3_small, hail_mobilenet_v3_pmn
+from fed_platform.cluster import LocalAPI, SegmentationCluster, ClassificationCluster, PersonalCluster
+import torch
 
-def _load_state_dict(path):
+def seed():
 
-    return
-
-
-def _load_weights(arch: str, model: nn.Module, model_url: Optional[str], progress: bool) -> None:
-    if model_url is None:
-        raise ValueError(f"No checkpoint is available for {arch}")
-
-    state_dict = _load_state_dict(model_url)
-
-    model.load_state_dict(state_dict)
+    torch.manual_seed(42)
 
 if __name__ == '__main__':
 
     args = parse_opt()
-    c = Config(args.cfg_path)
-    model = hail_mobilenet_v3_large(pretrained=args.pretrained)
-    # model.to('cuda:0')
-    # _load_weights('tmp', model, model_url='./')
+    seed()
+    model = hail_mobilenet_v3_pmn
 
-    # pack = LoaderPack(args, dynamic=True, client='client_animal', global_gpu=True)
-    # config = Config(json_path=str(pack.cfg_path))
-    # pack.set_loader(config)
-    # print(pack.data_loader)
-    print()
+    args.tasks = 'cif'
+    args.dataset ='cifar'
+    args.data_path = 'dataset/cifar'
 
+    args.save_root = '/home/hail09/FedPn/experiments/DEBUG'
+    args.resume = '/home/hail09/FedPn/experiments/DEBUG'
 
+    args.aux_loss = True
+    args.global_loss = True
 
+    args.readme = 'STANDALONE.DIFF'
+    args.num_clients = 1
+
+    args.start_epoch = 0
+    args.epochs = 2
+    args.gpu = 1
+
+    args.cfg_path = './experiments/cifar.cif.config.json'
+
+    model_mapper = None
+    cluster_mapper = None
+
+    if args.model_name == 'FedMpn':
+        model_mapper = hail_mobilenet_v3_large
+    elif args.model_name == 'FedSMpn':
+        model_mapper = hail_mobilenet_v3_small
+    elif args.model_name == 'FedAMpn':
+        model_mapper = hail_mobilenet_v3_pmn
+
+    if args.tasks == 'seg':
+        cluster_mapper = SegmentationCluster
+    elif args.tasks == 'cif':
+        cluster_mapper = PersonalCluster
+
+    running = LocalAPI(args, base_steam=FedStream, base_reader=FedReader, base_net=model_mapper,
+                       base_cluster=cluster_mapper, writer=False, global_gpu=args.global_gpu_set, verbose=False)
+
+    running.execute()

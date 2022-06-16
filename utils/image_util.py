@@ -7,19 +7,6 @@ import torch.distributed as dist
 import errno
 import os
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -127,7 +114,6 @@ class ConfusionMatrix(object):
                 iu.mean().item() * 100)
 
 
-
 class ConfusionMatrixAcc(ConfusionMatrix):
 
     def __init__(self, *args, **kwargs):
@@ -158,14 +144,13 @@ class ConfusionMatrixAcc(ConfusionMatrix):
         acc_global = torch.diag(h).sum() / h.sum()
         acc = torch.diag(h) / h.sum(1)
         acc_class = list(zip(self.class_info, acc.tolist()))
-        top_5 = sorted(acc_class, key=lambda x: -x[1])[:5]
+        # top_5 = sorted(acc_class, key=lambda x: -x[1])[:5]
 
-        return acc_global, acc, top_5, acc_class
+        return acc_global, acc, acc_class
 
     def __str__(self):
-        acc_global, acc, top_5, acc_class = self.compute()
-        return (f"Global Correct: {acc_global}\n acc_per_class{acc_class}\n"
-                f"top_5 acc class{top_5}" )
+        acc_global, acc, acc_class= self.compute()
+        return (f"Global Correct: {acc_global}")
 
 
 class MetricLogger(object):
