@@ -1,4 +1,4 @@
-dataset/cifar-10-batches-py
+dataset/cifar
 .venv
 venv
 FPN.pytorch1.0

@@ -7,41 +7,6 @@ import math
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-
-class FedPnHead(nn.Sequential):
-
-    def __init__(self, in_channels, channels):
-        inter_channels = in_channels // 4
-
-        lastconv_output_channels = 6 * in_channels
-
-        layers = [
-            nn.Linear(in_channels, inter_channels),
-            nn.Hardswish(inplace=True),
-            nn.Dropout(p=0.2, inplace=True),
-            nn.Linear(inter_channels, channels),
-        ]
-
-        super(FedPnHead, self).__init__(*layers)
-
-
-class FedPnBinHead(nn.Sequential):
-
-    def __init__(self, in_channels, channels):
-        inter_channels = in_channels // 4
-
-        lastconv_output_channels = 6 * in_channels
-
-        layers = [
-            nn.Linear(in_channels, inter_channels),
-            nn.Hardswish(inplace=True),
-            nn.Dropout(p=0.2, inplace=True),
-            nn.Linear(inter_channels, channels),
-        ]
-
-        super(FedPnHead, self).__init__(*layers)
-
-
 def conv3x3(in_planes, out_planes, stride=1, padding=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=padding, bias=False)
 
@@ -122,45 +87,47 @@ class BotteNeck(nn.Module):
 class LocalEncoder(nn.Module):
 
     def __init__(self, block, layer, seq_len):
-        self.inplanes = 64
+        self.inplanes = 16
         super(LocalEncoder, self).__init__()
-        self.conv1 = nn.Conv2d(3**seq_len, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
+        self.conv1 = nn.Conv2d(3**seq_len, 16, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
         self.relu = nn.ReLU(inplace=True)
 
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layer[0])
-        self.layer2 = self._make_layer(block, 128, layer[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layer[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layer[3], stride=2)
+        self.layer1 = self._make_layer(block, 16, layer[0],stride=1)
+        self.layer2 = self._make_layer(block, 32, layer[1], stride=2)
+        self.layer3 = self._make_layer(block, 64, layer[2], stride=2)
+        self.layer4 = self._make_layer(block, 128, layer[3], stride=2)
 
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes* block.expansion,
+                nn.Conv2d(self.inplanes, planes * block.expansion,
                           kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm2d(planes * block.expansion),
             )
-            layers = []
-            layers.append(block(self.inplanes, planes, stride, downsample))
-            self.inplanes = planes * block.expansion
-            for i in range(1, blocks):
-                layers.append(block(self.inplanes, planes))
 
-            return nn.Sequential(*layers)
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
 
 
-    def forward(self,x):
+    def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
+        print('x0 DATA ', torch.sum(x.data))
         x = self.layer1(x)
-        c3 = self.layer1(x)
-        c4 = self.layer2(c3)
-        c5 = self.layer3(c4)
+        c3 = self.layer2(x)
+        c4 = self.layer3(c3)
+        c5 = self.layer4(c4)
 
         return c3, c4, c5
 
@@ -171,15 +138,15 @@ class GlobalEncoder(nn.Module):
     def __init__(self, block):
         super(GlobalEncoder, self).__init__()
 
-        self.conv6 = conv3x3(512*block.expansion, 256, stride=2, padding=1) # p6
-        self.conv7 = conv3x3(256, 256, stride=2, padding=1) # p7
+        self.conv6 = conv3x3(128*block.expansion, 64, stride=2, padding=1) # p6
+        self.conv7 = conv3x3(64, 32, stride=2, padding=1) # p7
 
-        self.lateral_layer1 = conv1x1(512*block.expansion, 256)
-        self.lateral_layer2 = conv1x1(256*block.expansion, 256)
-        self.lateral_layer3 = conv1x1(128*block.expansion, 256)
+        self.lateral_layer1 = conv1x1(128*block.expansion, 32)
+        self.lateral_layer2 = conv1x1(64*block.expansion, 32)
+        self.lateral_layer3 = conv1x1(32*block.expansion, 32)
 
-        self.corr_layer1 = conv3x3(256, 256, stride=1, padding=1) # p4
-        self.corr_layer2 = conv3x3(256, 256, stride=1, padding=1) # p3
+        self.corr_layer1 = conv3x3(32, 32, stride=1, padding=1) # p4
+        self.corr_layer2 = conv3x3(32, 32, stride=1, padding=1) # p3
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -196,7 +163,7 @@ class GlobalEncoder(nn.Module):
         return x_upsampled + y
 
 
-    def forwad(self, c):
+    def forward(self, c):
         c3, c4, c5 = c
 
         p6 = self.conv6(c5)
@@ -210,7 +177,11 @@ class GlobalEncoder(nn.Module):
         p3 = self._upsample_add(p4, lat3)
         p3 = self.corr_layer2(p3)
 
-        return p3, p4, p5, p6, p7
+        return p3, p4, p5
+
+
+
+
 
 
 class FFPN(nn.Module):
@@ -226,23 +197,10 @@ class FFPN(nn.Module):
 
         return ps
 
-
-
-class SimpleNet(nn.Module):
-
-    def __int__(self, block, layer, seq_len):
-        super(SimpleNet, self).__init__()
-        self.net
-        pass
-
-
-
-
-
 def ffpn(perms, name, seq_len=1, input_dim=600):
 
     num = int(name[6:])
-    if num <= 50:
+    if num <=50:
         return FFPN(BasicBlock, perms, seq_len)
     else:
         return FFPN(BotteNeck, perms, seq_len)
@@ -252,7 +210,8 @@ def base_models(modelname, model_dir, pretrained =False):
     import os
 
     if modelname[:6] == 'resnet':
-        modelperms = {'resnet50':[3,4,6,3]}
+        modelperms = {'resnet18': [2, 2, 2, 2], 'resent34': [3, 4, 6, 3], 'resnet50': [3, 4, 6, 3],
+                      'resnet101': [3, 4, 23, 3], 'resent152': [3, 8, 36, 3]}
 
         model = ffpn(modelperms[modelname], modelname)
 
@@ -262,8 +221,6 @@ def base_models(modelname, model_dir, pretrained =False):
 
         return model
 
-    print(f'check model path or model name: {model_dir}')
-    return None
 
 
 

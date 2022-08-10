@@ -3,7 +3,9 @@ import asyncio
 import requests
 from queue import PriorityQueue
 import time
-from cluster import Cluster
+from fed_platform.cluster import Cluster, SegmentationCluster, ClassificationCluster
+
+from collections import deque
 
 TIMEOUT = 3000
 '''
@@ -18,7 +20,7 @@ class BaseStream:
         self.writer: BaseWriter = writer
         self._tasks = None
         self.timeout = timeout
-        self._schedule = []   # dev modifiy class type list to PrirityQueue
+        self._schedule = []   # task tuple set
         print(f"{'-'*10}\nStream Info:\n{self}\n{'-'*10}")
 
     def __repr__(self):
@@ -67,14 +69,17 @@ class FedStream(BaseStream):
     def __init__(self, *args, **kwargs):
         super(FedStream, self).__init__(*args, **kwargs)
         self.reader: FedReader
+
         if self.check_status(self.reader):
-            print('super init', self.reader)
+            pass
 
     def scheduler(self, pack=None):
+        pack.tb_writer = self.writer
+        self.reader.packs.append(pack)
 
-        self._schedule.append(self.reader.run(pack))
-
-        print(f'reserved : {len(self._schedule)} ', end=' ')
+        self._schedule.append(self.reader.run())
+        print(f"\t{'|'}", end=' ')
+        print(f'Reserved : {len(self._schedule)} ', end=' ')
 
     @staticmethod
     def check_status(reader):
@@ -128,21 +133,23 @@ class BaseReader:
 
 class FedReader(BaseReader):
 
-    def __init__(self, model=None, cluster=None):
+    def __init__(self, model_map_locate=None, cluster=None):
         super(FedReader).__init__()
-        self.net = model
-        self.cluster = cluster
+        self.map_model = model_map_locate   # func before allocate
+        self.cluster : Cluster = cluster
+        self.packs = deque()
 
-    async def run(self, packer):
+    def __repr__(self):
+        return f"{self.__class__} :: BASE Cluster: {self.cluster} BASE NET: {self.map_model}"
+
+    async def run(self):
         '''
-
         :param loader:
-        :return: fed model parmas
+        :return: fed model params
         '''
-        if issubclass(self.session, Cluster):
-            async with self.cluster(self.net, packer) as response:
-                result = response
-                return result
+        async with self.cluster(self.map_model, self.packs.popleft()) as response:
+            result = response
+            return result
 
 
 class BaseWriter:
