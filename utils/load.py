@@ -157,7 +157,7 @@ class Detection(data.Dataset):
 
         # if self.anno_transform:
         #     prior_labels, prior_gt_locations = self.anno_transform(boxes_, labels_, len(labels_))
-
+# gut
         return imgs, target, index, wh
 
 
